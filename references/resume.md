@@ -1,7 +1,7 @@
 # list & resume（恢复）
 
 1. 定位项目。
-2. **扫描"最近活跃工作"**：跑 `scripts/tf.mjs ls`——登记任务表 + 游离工作一次给出（降噪已内置：近 3 天有提交或改动、上限 8 条、跳过 adopt-ignore、plan 目录扫描、同前缀提示；**verifying 任务置顶打印「📌 待你验收」块并显示挂起天数**）。脚本缺失/报错 → 手工兜底：index.json 的 active/verifying 按 lastActiveAt 倒序（verifying 显示"等验收"并**排最前、注明挂起天数**，与 ls 输出规则一致）；游离=未登记 worktree + 近 3 天活跃分支（排除主分支/备份命名）+ `~/.opencode/plan/*.md` 文件头匹配本项目的交接文档（Plan mode 只能写全局目录，漏网重灾区）；跳过 adopt-ignore.json（含前缀模式），上限 8 条。同前缀 ≥3 个未登记 worktree → 问一次"加入忽略清单？"，确认后以前缀模式写入 adopt-ignore.json
+2. **扫描"最近活跃工作"**：跑 `scripts/tf.mjs ls`——登记任务表 + 游离工作一次给出（降噪已内置：近 3 天有提交或改动、上限 8 条、跳过 adopt-ignore、plan 目录扫描、同前缀提示；**verifying 任务置顶打印「📌 待你验收」块并显示挂起天数**）。脚本缺失/报错 → 手工兜底：index.json 的 active/verifying 按 lastActiveAt 倒序（verifying 显示"等验收"并**排最前、注明挂起天数**，与 ls 输出规则一致）；游离=未登记 worktree + 近 3 天活跃分支（排除主分支/备份命名）+ 宿主 plan 目录（经 planScanDirs 配置：omp=`~/.opencode/plan`、claude=`~/.claude/plans`）文件头匹配本项目的交接文档（plan mode 只能写全局目录，漏网重灾区）；跳过 adopt-ignore.json（含前缀模式），上限 8 条。同前缀 ≥3 个未登记 worktree → 问一次"加入忽略清单？"，确认后以前缀模式写入 adopt-ignore.json
 3. **把 ls 的登记任务表格原样输出给用户**（markdown 表格含目标列，不缩写、不散文化——用户靠它知道每个任务是干嘛的；「已搁置」任务原样呈现并在呈报时注明「已搁置：<原因>；恢复跑 unpark」），第一个问题 = "继续哪个？"：
    - 登记任务 → 直接继续（按各自流程走）
    - 游离工作 → 三个出口：**继续（先按 adopt.md 收编补档案）** / 仅收编建档 / 忽略并记住（adopt-ignore.json）
@@ -19,7 +19,7 @@
 6. 读 `.taskflow/conventions.md`（项目约定，必读）+ spec.md、handoff.md、findings.md、decisions.md + **spec「需求基线」节列出的 PRD 条目（REQ_BASELINE 读路径：读链接即读文件，机械加载不靠裁量——原始需求与业务口径住 docs/prd，接力不读它=漂移温床）**（项目决策库 decisions/ 如相关也读）；**前端 UI 任务在原型/设计环节的：加读 `packs/frontend/prototype.md`（六步链，含 ⑤ 裁决回写核对）**。pre-v2.23 档案无「需求基线」节 → ℹ 提示顺手补（跑 `tf.mjs req-confirm` 补锚）。
 
    **子任务在途分支（v2.53.0，对抗审查实证缺口）**：读 task.json `subtasks[]`——存在非 done 项 = 上次中断在拆分派发中 → 按 split.md 第 4/5 步续派（复用已建子 worktree 与分支，`task/<id>/<n>-<slug>` 归父任务管），**兄弟子任务 worktree/分支禁收编禁忽略**（strays 已按命名排除，误报时人工归位父任务）；恢复摘要须列子任务进度（done/total + 打回原因若有）。
-7. 输出恢复摘要：**需求锚定（以 PRD 基线口径复述：本任务要满足的原始需求 / 当前进度 / 与基线的已知偏差；small 档一行带过）/ 当前在哪（环节名直接报，如「卡在 code review，阻塞项剩 1」）/ 下一步（具体命令）/ 未决风险**——复述口径不对，用户当场纠（确认在第 8 步收口）。摘要确认后把「下一步」init 成 omp Todo（会话工作台——SKILL.md「会话工作台」）。
+7. 输出恢复摘要：**需求锚定（以 PRD 基线口径复述：本任务要满足的原始需求 / 当前进度 / 与基线的已知偏差；small 档一行带过）/ 当前在哪（环节名直接报，如「卡在 code review，阻塞项剩 1」）/ 下一步（具体命令）/ 未决风险**——复述口径不对，用户当场纠（确认在第 8 步收口）。摘要确认后把「下一步」init 成会话任务清单（挂点约定见 pipeline.md「会话工作台挂点」）。
 8. 用户确认后继续工作；续做时把 task.json 与 index.json 的 sessionID 更新为当前会话（sessionID=最近活跃会话，旧会话线索留在 progress.md 与 note）。**接管触发分三态（v2.53.0，对齐 I9 与 README 口径；①②③按序判定，①命中即停——防②的字面条件越过在途核对直取 takeover）**：① lease 活跃且属主 pid 活（pid 活判定引 I10 单向判据：进程启动时间晚于 `.owner.json` 凭证时间 = pid 复用嫌疑 → 按②处理——方向安全：误拦只多一轮呈报，反方向可能踩在途会话）→ **先呈报「前任在途」核对**（doctor I9 同款提示），用户确认前任真停手后才跑接管仪式——禁直接覆写（多会话互踩正是接管要防的场景）；② 会话不符 / lease 过期 / 属主 pid 已死 → 直接跑 `node <skill目录>/scripts/tf.mjs takeover <task-id> --session <当前会话ID>`（机械改 sessionID + 重写 worktree/`.owner.json`（OWNER_JSON 属主凭证）+ 刷新 LEASE 心跳 + 打印桌面清点清单；①态强接须加 `--force`）；**清点（未提交改动逐项过目、认领或编辑文件丢弃）由编排层完成并复述给用户，完成前禁止 commit**。**遗留服务核对**：续做涉本地 dev 服务的验证前，先 `node <skill目录>/scripts/tf.mjs svc ls` 核对 services.json 租约（stale/orphan 先 `svc release` 清理——上次会话的服务可能还挂在端口上，防占用误判）。
 9. **verifying 任务的恢复**：跳过开发流程，直接从 merge.md 第 6 步（推送与部署）继续验收闭环。**恢复第一动作：跑 `node <skill目录>/scripts/tf.mjs accept <task-id>` 把验收简报重新呈给用户**——长任务跑完一小时，人的注意力刚回来，早忘了任务起点；简报说清：任务是什么、部署了什么、验哪几项、怎么验、怎么回复（「验收通过」才归档 / 哪条不符说看到什么）。verifying/active 任务的「打回」走本步与修复循环，**不产生已合并代码的回退**；若用户诉求是撤回已合并（merged）的代码，改跑 `node <skill目录>/scripts/tf.mjs revert-plan <task-id>` 生成 Saga 补偿方案（只读不执行，逐条 `git revert -m 1` 需用户逐条确认）。
 10. **归档续迭代**（用户提及已完成/历史工作，活任务与游离无命中）：

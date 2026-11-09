@@ -109,4 +109,4 @@ node <skill目录>/scripts/tf.mjs skills [领域词]   # 如：skills 前端UI /
 
 **兜底**：领域技能不可用（未装/未选装）→ 按常规流程继续，并在审查结果中**如实注记**「未经 XX 审查」——注记是硬要求，静默跳过=双重失败。映射表未列的栈走通用流程。
 
-**扩展**：新领域技能接入=两步——①`scripts/skills-registry.json` 加一条（id/领域/一句话用途/安装命令）；②上表加一行映射。检测命令自动生效，无需改代码。装的动作本身走 `install-skill`（四步 fitness check：格式/依赖/OpenCode 覆盖/冲突，装完验证 OpenCode 真看得到），不裸跑 `npx skills add`。
+**扩展**：新领域技能接入=两步——①`scripts/skills-registry.json` 加一条（id/领域/一句话用途/安装命令）；②上表加一行映射。检测命令自动生效，无需改代码。装的动作本身走 `install-skill`（四步 fitness check：格式/依赖/宿主覆盖/冲突，装完验证宿主真看得到——覆盖基准=当前宿主的技能扫描位），不裸跑 `npx skills add`。

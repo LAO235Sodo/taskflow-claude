@@ -1,6 +1,6 @@
 ---
 name: taskflow
-version: 3.1.0
+version: 3.2.0
 description: 长任务跨会话账本：建档、checkpoint、恢复、合并、验收。触发：描述需求/继续之前的活/中断存档/验收打回/问进度/走查或验收页面功能（开工先挂分阶段工作台）
 ---
 
@@ -13,7 +13,7 @@ description: 长任务跨会话账本：建档、checkpoint、恢复、合并、
 2. **先存档，再跑**——有风险的执行动作之前必须 checkpoint；
 3. **不审查，不合并；不验收，不归档**——归档只发生在用户最终验收通过之后。
 
-**定位项目**：`git rev-parse --path-format=absolute --git-common-dir` 定主仓库根，任务数据在 `<主仓库根>/.taskflow/`（隐藏目录，glob 需 `hidden:true`）；非 git 目录用 `tf.mjs init --no-git` 走档案模式；项目身份=remote 规范化或绝对路径，全局注册表住 `$TF_TASKFLOW_HOME`（缺省 `~/.local/state/taskflow`）。
+**定位项目**：`git rev-parse --path-format=absolute --git-common-dir` 定主仓库根，任务数据在 `<主仓库根>/.taskflow/`（隐藏目录，glob 注意包含隐藏文件）；非 git 目录用 `tf.mjs init --no-git` 走档案模式；项目身份=remote 规范化或绝对路径，全局注册表住 `$TF_TASKFLOW_HOME`（缺省 `~/.local/state/taskflow`）。
 
 
 **意图路由**：任何输入先读 `references/entry-routes.md` 按语义路由到对应入口与 references 文件（唯一路由表）；多意图逐个分解按依赖排序。

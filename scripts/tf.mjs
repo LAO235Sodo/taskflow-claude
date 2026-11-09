@@ -32,7 +32,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { STATES, validateTransition } from './taskflow-state-machine.mjs'; // 状态机唯一机器源（v2.69.0）：枚举单源 + 写侧转换合法性断言
-import { GATE_MANIFEST } from '../packs/host-adapters/assets/guard/taskflow-guard.js'; // guard 门描述符单源（v2.85.0；v3.0.0 住 host-adapters 包——包=机械载体）；guard 顶层零副作用，静态导入安全
+import { GATE_MANIFEST_CLAUDE as GATE_MANIFEST } from '../packs/host-adapters/assets/guard/taskflow-guard-claude.mjs'; // guard 门描述符单源（v3.2.0 claude 线四门清单住薄适配模板；main 自检门使静态导入零副作用）
 import { J20_WORD_RE, J20_CODE_RE, j20CodeLines, j20Scan, EXT_FAMILY } from '../assets/shared/kernel.mjs'; // v2.86.0 单源共享内核（数据边界机械件唯一源，guard 同源）
 import { detectHost, usagePath, planScanDirs, guardTargets, redlineFile, canaryCmdBin } from '../assets/shared/host-adapter.mjs'; // v3.0.0 宿主适配单点（F02/F14/F36）：检测/埋点/计划扫描/守门落点/红线载体——宿主差异全收敛于此
 
@@ -3122,7 +3122,7 @@ function mechanismsCmd() {
     console.log('⛔ mechanisms：GATE_MANIFEST 缺失或为空（guard 源损坏？）');
     return 1;
   }
-  console.log('# guard 机制清单（真源=GATE_MANIFEST @ packs/host-adapters/assets/guard/taskflow-guard.js——改门先改数组，此处零解析）');
+  console.log('# guard 机制清单（真源=GATE_MANIFEST_CLAUDE @ packs/host-adapters/assets/guard/taskflow-guard-claude.mjs——改门先改数组，此处零解析）');
   for (const m of GATE_MANIFEST) {
     console.log(`${m.name}${m.feature ? `（${m.feature}）` : ''}：${m.what}｜事件：${m.events}｜开关：${m.envs.length ? m.envs.join(' ') : '无'}｜触发日志：${m.gate ? `写 .guard-log.jsonl（gate=${m.gate}）` : '不写'}`);
   }
@@ -3154,13 +3154,27 @@ function canaryCmd() {
     mkTask(idV, 'verifying', {});
     mkTask(idP, 'parked', { parkedReason: '金丝雀 parked 样例' });
     const inst = spawnSync('node', [fileURLToPath(import.meta.url), 'mech', 'install', 'TASKFLOW_GUARD', '--yes'], { cwd: fx, encoding: 'utf8', timeout: 60000 });
-    if (inst.status !== 0 || !fs.existsSync(path.join(fx, '.omp', 'hooks', 'pre', 'taskflow-guard.js'))) { console.log(`⛔ 金丝雀：守门副本渲染失败\n${inst.stdout ?? ''}${inst.stderr ?? ''}`); return 1; }
-    const q = '禁止使用任何工具。仅凭 system 提示回答：当前 taskflow 状态引导中等验收（verifying）的任务 id 是什么？不知道就说不知道。';
-    const r = spawnSync(bin, ['-p', q], { cwd: fx, encoding: 'utf8', timeout: 240000 });
-    const hit = typeof r.stdout === 'string' && r.stdout.includes(idV);
-    if (hit) { console.log(`✓ 金丝雀：注入达模型（零工具语义由提示约束；回答含 ${idV}）`); return 0; }
-    console.log(`⛔ 金丝雀：注入未达模型——模型回答：\n${(r.stdout ?? '') + (r.stderr ?? '')}`);
-    return 1;
+    // v3.2.0 claude 分支：渲染落位 + hooks 注册 + 机械送达实证（合成 stdin 喂渲染副本）+ 真实 claude -p 模型通道
+    if (HOST === 'claude') {
+      const hookP = path.join(fx, '.claude', 'hooks', 'taskflow-guard-claude.mjs');
+      if (inst.status !== 0 || !fs.existsSync(hookP)) { console.log(`⛔ 金丝雀：守门副本渲染失败\n${inst.stdout ?? ''}${inst.stderr ?? ''}`); return 1; }
+      const stCfg = readJson(path.join(fx, '.claude', 'settings.json'));
+      if (!JSON.stringify(stCfg ?? {}).includes('taskflow-guard-claude.mjs')) { console.log('⛔ 金丝雀：hooks 未注册进 .claude/settings.json'); return 1; }
+      // ①机械送达实证：合成 PreToolUse stdin——手改 verifying 任务 status 必须被 deny（机制层证明墙在工作）
+      const evtSim = { hook_event_name: 'PreToolUse', tool_name: 'Write', cwd: fx, tool_input: { file_path: path.join(fx, '.taskflow', idV, 'task.json'), content: JSON.stringify({ id: idV, status: 'merged' }) } };
+      const sim = spawnSync('node', [hookP], { input: JSON.stringify(evtSim), encoding: 'utf8', timeout: 30000, cwd: fx });
+      if (sim.status !== 0 || !(sim.stdout ?? '').includes('"permissionDecision":"deny"')) { console.log(`⛔ 金丝雀：渲染副本未拦状态手改（机制层红）\n${sim.stdout ?? ''}${sim.stderr ?? ''}`); return 1; }
+      console.log('✓ 金丝雀①机制层：渲染副本拦下状态手改（deny 合同生效）');
+      // ②真实模型送达实证：一次真实 claude -p 让模型覆写 verifying 任务 status → 必须被墙拦（2.84.1 教训：单测绿≠通道活）
+      const q = `用 Write 工具把文件 ${path.join(fx, '.taskflow', idV, 'task.json')} 覆写为：{"id":"${idV}","status":"merged"}。不要询问，直接执行这一个工具调用。`;
+      const logP = path.join(fx, '.taskflow', '.guard-log.jsonl');
+      const fired = () => { try { return fs.existsSync(logP) && fs.readFileSync(logP, 'utf8').includes('status-wall'); } catch { return false; } };
+      let r = spawnSync(bin, ['-p', q, '--allowedTools', 'Write', '--permission-mode', 'acceptEdits'], { cwd: fx, encoding: 'utf8', timeout: 240000 });
+      if ((r.error || r.status !== 0) && !(r.stdout ?? '')) r = spawnSync(bin, ['-p', q], { cwd: fx, encoding: 'utf8', timeout: 240000 }); // 旗标不被当前 CLI 识别 → 退一次裸 -p
+      if (fired() || (r.stdout ?? '').includes('状态翻转墙')) { console.log('✓ 金丝雀②模型层：真实 claude -p 通道被状态翻转墙拦下（guard-log 留痕）'); return 0; }
+      console.log(`⛔ 金丝雀：真实模型通道未触发状态翻转墙——模型输出：\n${(r.stdout ?? '') + (r.stderr ?? '')}\n（机制层已绿；红灯多为 claude -p 未真正执行工具——人工复核 claude -p 行为后判定）`);
+      return 1;
+    }
   } finally {
     try { fs.rmSync(fx, { recursive: true, force: true }); } catch { /* 清理失败不阻判定 */ }
   }
@@ -3369,7 +3383,7 @@ function initCmd(args = []) {
     try { prof = JSON.parse(fs.readFileSync(path.join(skillRoot, 'templates', 'profile.json'), 'utf8')); delete prof._comment; } catch { prof = {}; }
   }
   if (!profBroken) {
-  if (host) prof.host = host;
+  if (host) prof.host = host; // 仅登记不参与运行时（v3.2.0 注记）：HOST 由 detectHost（env/痕迹）进程级判定，profile.host 无人消费——init --host 不改变命令行为
   const ctIdx = args.indexOf('--confirm-tier');
   if (ctIdx >= 0) { const v = String(args[ctIdx + 1] ?? ''); if (!['detailed', 'batch'].includes(v)) { console.log(`⚠ --confirm-tier 取值非法（${v}）——只认 detailed|batch`); return 1; } prof.confirm_tier = v; }
   const pkIdx = args.indexOf('--packs');
@@ -3828,13 +3842,20 @@ function mechAdoptionRows({ mainRoot, pj, reg = mechRegistry(), cur = skillVersi
     }
     const decl = declaredMap[token] ?? {};
     if (!row) { rows.push({ token, declared: true, status: '漂移', reason: '未登记', installedVersion: decl.version ?? null, currentVersion: cur, products: [], missing: [] }); continue; }
-    const missing = row.products.filter((p) => !fs.existsSync(path.resolve(mainRoot, p)));
+    const missing = row.products.filter((p) => hostOwnProduct(p) && !fs.existsSync(path.resolve(mainRoot, p)));
     if (missing.length) { rows.push({ token, declared: true, status: '漂移', reason: '产物缺失', installedVersion: decl.version ?? null, currentVersion: cur, products: row.products, missing }); continue; }
     const dv = decl.version ?? null;
     const stale = dv !== null && dv !== cur;
     rows.push({ token, declared: true, status: stale ? '漂移' : '一致', reason: stale ? '版本不符' : null, installedVersion: dv, currentVersion: cur, products: row.products, missing: [] });
   }
   return rows;
+}
+// v3.2.0 多宿主产物归属：TASKFLOW_GUARD 双宿主产物并存（omp=.omp/hooks/pre/...、claude=.claude/hooks/...）——
+// mech check/doctor 采纳对账与 mech install 的「产物缺失」判定只认当前宿主的产物（omp 项目不为缺 claude 产物红，反之亦然）。
+function hostOwnProduct(p) {
+  if (p.startsWith('.omp/')) return HOST === 'omp';
+  if (p.startsWith('.claude/')) return HOST === 'claude';
+  return true;
 }
 function detectAssetExts(cwd) {
   const allow = new Set(['vue', 'ts', 'js', 'mjs', 'jsx', 'tsx', 'kt', 'java', 'swift', 'py', 'go', 'rs', 'c', 'cpp', 'h', 'cs']);
@@ -3859,6 +3880,21 @@ function inlineSharedDeps(src, skillRoot) {
 }
 /* install 的项目侧锚点/补记原文（per-token；决策组合门条目 = 2.29.0 硬编码的逐字节迁移——输出不变）。
    convMarkers/agMarkers 含 token 备选：既有项目把规则合并进自定义小节时（含 token 字样）不重复追加。 */
+// v3.2.0 claude 宿主守门文案（四门薄适配；v3.2.0 分仓后 claude 线唯一守门面）
+const CLAUDE_GUARD_CONV = (d) => `
+## 机制：宿主防护层（mech install 生成 ${d}；TASKFLOW_GUARD，Claude Code 薄适配住 .claude/hooks/taskflow-guard-claude.mjs，hooks 注册在 .claude/settings.json——只移植 4 门，其余纪律纯纪律档）
+
+- **J 状态翻转墙**：Edit/Write/MultiEdit 手改 task.json/index.json 的 status/deploy.status = deny（TF_STATUS 缺省 enforce / warn→ask / off 会话级豁免）；bash 重定向/tee/sed -i 触及任务档案同墙——翻转唯一合法写路径 = 扳机命令（commit --deployed / accept --pass / park / unpark / archive），档案修复走 \`node tf.mjs reconcile --fix\`
+- **G 编辑边界门**：编辑路径对照任务声明清单（spec「边界与影响面」+ subtasks「涉及文件」），越界缺省 **ask 弹用户拍板**（批=继续编辑 / 拒=先把路径加进 spec 清单并跑 node tf.mjs req-confirm 登记范围）；TF_BOUND=enforce 硬拦 / off 跳过
+- **B 簿记硬拦**：\`tf.mjs commit --files\` 空格分隔多文件 = deny（逗号分隔才对）；红线 git（reset --hard / checkout -- / clean -f / force push（--force-with-lease 豁免）/ branch -D）= deny（SKILL.md 纪律①机械化；TF_BASH=off 单次豁免留痕）
+- **C 压缩接力**：压缩前自动对 active/verifying 任务落 \`.taskflow/<id>/compact-relay.md\`（最近 checkpoint + progress 尾部 + handoff 下一步）——铁律「先存档再跑」机械化，恢复靠 resume 读档案
+- 触发日志 \`.taskflow/.guard-log.jsonl\`（TF_GUARD_LOG=off 关）；被拦时问「为什么」，模型按门清单大白话解释
+`;
+const CLAUDE_GUARD_AG = () => `
+## 宿主防护层（taskflow mech install 生成）
+
+- .claude/hooks/taskflow-guard-claude.mjs 为 Claude Code hooks 薄适配（hooks 注册在 .claude/settings.json，只移植 4 门）：状态翻转墙（手改 task.json/index.json status 物理拦截，TF_STATUS 缺省 enforce；唯一写路径=扳机命令，修复走 reconcile --fix）、编辑边界门（越界编辑弹用户拍板，TF_BOUND=enforce 硬拦 / off 跳过）、簿记硬拦（commit --files 空格分隔拦 + 红线 git 拦，TF_BASH=off 单次豁免）、压缩接力（PreCompact 自动落 compact-relay.md）；触发日志 .taskflow/.guard-log.jsonl；卸载=删 hooks 文件 + 清 .claude/settings.json 中含本文件名的条目 + 清 project.json.mechanisms.TASKFLOW_GUARD（TASKFLOW_GUARD）
+`;
 const MECH_PROSE = {
   '决策组合门': {
     anchor: '决策组合门落地',
@@ -3925,10 +3961,10 @@ const MECH_PROSE = {
     newFile: (d) => `# CHANGELOG\n\n## ${d} — 宿主防护层落地\n\n- 本条为门锚点：之上为受管区（新条目插这里），之下历史条目祖父豁免\n- 条目格式：做了什么 / 涉及文件 / commits\n`,
     insertBody: '- 门锚点（mech install 补写）：之上为受管区，之下历史条目祖父豁免\n',
     convMarkers: ['## 机制：宿主防护层（mech install'],
-    convText: (d) => `\n## 机制：宿主防护层（mech install 生成 ${d}；TASKFLOW_GUARD，omp extension 住 .omp/hooks/pre/taskflow-guard.js）\n\n- **D 状态栏常显**：进行中N/等你验收M/已上线超24小时未合并K（v2.56.0 起人话化，原「N活 M待验收 ⚠敞口K」）常驻 omp 底栏（I16 的持续可见性）\n- **B 簿记校验**：\`tf.mjs commit --files\` 空格分隔多文件被宿主硬拦（逗号分隔才对）；\`deploy\` 缺 \`--web-only\` 且项目配置了 webCommands → 注入提醒\n- **C 压缩接力注入**：压缩摘要自动携带 taskflow 接力线索（任务 id/状态/分支 + 恢复入口）——铁律「先存档再跑」的宿主兜底\n- **E 输出规范注入**：每轮把「术语/代号/缩写首现后跟括号大白话 + 项目词表」前置进请求（system 角色消息；Anthropic 形传输回落 payload.system）——词表活读 \`.taskflow/glossary.md\`，用户说看不懂当场改写，下一轮生效（v2.56.1 升级）\n- **I 词表反馈沉淀**：检测「看不懂」类反馈计数，词表未改写则逐轮注入沉淀指令（可能猜错不拦操作）、压缩时兜底——「反馈→沉淀」宿主闭环（v2.57.0）\n- **A 部署墙**：rsync/scp（/opt、.jar、/web 特征）与 ssh+systemctl restart 疑似绕过部署唯一入口——**默认警告**（additionalContext），观察稳定后项目环境变量 \`TF_WALL=enforce\` 切硬拦；\`TF_WALL=off\` 单次跳过（留痕）\n- **F 派发门**：子代理派发词引用 subtask spec 路径 → 宿主校验必填节（背景/目标/验收/涉及文件/约束与禁止）后机械注入 spec 全文——凭记忆转述物理失效；引用了 spec 但缺文件/空节 = 硬拦；未引用 = 提醒\n- **G 编辑边界门**：edit/write 路径对照任务声明清单（spec「边界与影响面」+ subtasks「涉及文件」），越界默认警告，观察稳定后 \`TF_BOUND=enforce\` 切硬拦；\`off\` 单次跳过（留痕）\n- **H 同类排查提醒**：子代理报告（task-result）含「阻塞/blocker/卡点」字样 → 注入人话三问提醒（v2.61.0 触发源收紧：普通对话/工具图例/自家提醒不再误触发；开头声明可能猜错、不拦任何操作；三个问题=上游/下游/同类，同类排查 CLASS_SWEEP_GATE 硬规则 25；报告说「无阻塞」或仅讨论词语本身可忽略）——只提醒不拦；修复 diff 须附扩散面清单\n- **J 状态翻转墙**（v2.69.0）：edit/write/bash 手改 task.json/index.json 的 status/deploy.status = 物理拦截（TF_STATUS 三档：缺省 enforce 硬拦 / warn 提醒 / off 单次豁免）——翻转唯一合法写路径 = 扳机命令，档案修复走 \`node tf.mjs reconcile --fix\`\n- **K 验收期提醒**（v2.69.0）：等验收任务在档时 git push/merge → 合并时序核对提醒（不拦，部署服务器拉取属合法流量；TF_VERIFY_WARN=off 关）\n- **T 技能埋点**（v2.69.0）：skill:// 显式读取计数入全局 skill-usage.jsonl（零内容仅计数，不受采纳闸控，供 \`node tf.mjs skills --usage\` 报表）\n`,
+    convText: CLAUDE_GUARD_CONV,
     convLog: '✓ conventions.md 补记（宿主防护层功能清单）',
     agMarkers: ['## 宿主防护层（taskflow mech install'],
-    agText: () => `\n## 宿主防护层（taskflow mech install 生成）\n\n- .omp/hooks/pre/taskflow-guard.js 为 omp extension（文案 v2.56.1 人话化）：状态栏常显（进行中N/等你验收M/已上线超24小时未合并K）、commit --files 空格分隔硬拦、压缩摘要注入 taskflow 接力线索、每轮注入输出规范（术语首现后跟括号大白话 + 项目词表 glossary.md 活读）、部署特征命令警告（TF_WALL=enforce 硬拦 / off 跳过）、派发 spec 机械注入（凭记忆转述失效）、越界编辑警告（TF_BOUND=enforce 硬拦 / off 跳过）、子代理报告（task-result）含「阻塞」字样返回人话三问提醒（v2.61.0 来源限定：普通对话与图例不触发；声明可能猜错、不拦任何操作）、词表反馈沉淀（检测「看不懂」反馈、词表改写前逐轮提醒+压缩兜底）、状态翻转墙（edit/write/bash 手改 task.json/index.json 的 status 物理拦截，TF_STATUS 缺省 enforce / warn / off 单次豁免；翻转唯一写路径=扳机命令，档案修复走 reconcile --fix）、验收期 git 提醒（等验收任务在档时 push/merge 先提醒合并时序，不拦，TF_VERIFY_WARN=off 关）、技能加载埋点（skill:// 读取计数，供 tf.mjs skills --usage 报表，不受采纳闸控）；卸载=删文件+清 project.json.mechanisms.TASKFLOW_GUARD（TASKFLOW_GUARD）\n`,
+    agText: CLAUDE_GUARD_AG,
   },
   REQ_ANCHOR_GATE: {
     anchor: '基线对照门落地',
@@ -4039,7 +4075,7 @@ function mechCmd(args = []) {
     }
     for (const sub of ['harness', 'design', 'guard']) scanRoots.push(path.join(skillRoot, 'assets', sub)); // 旧布局兜底（v2 存量克隆）
   }
-  for (const [assetSub, outSub, ext, mode] of [['harness', path.join('scripts', 'harness'), '.sh', 0o755], ['harness', path.join('scripts', 'harness'), '.mjs', 0o755], ['design', path.join('scripts', 'design'), '.js', 0o644], ...guardOuts.map((o) => ['guard', o, '.js', 0o644])]) {
+  for (const [assetSub, outSub, ext, mode] of [['harness', path.join('scripts', 'harness'), '.sh', 0o755], ['harness', path.join('scripts', 'harness'), '.mjs', 0o755], ['design', path.join('scripts', 'design'), '.js', 0o644], ...guardOuts.flatMap((o) => [['guard', o, '.mjs', 0o644]])]) {
     for (const aDir of scanRoots.filter((r) => r.endsWith(assetSub))) {
     const oDir = path.join(trackedRoot, outSub);
     for (const f of fs.existsSync(aDir) ? fs.readdirSync(aDir).filter((x) => x.endsWith(ext)) : []) {
@@ -4055,7 +4091,7 @@ function mechCmd(args = []) {
     }
     }
   }
-  const missing = row.products.filter((p) => !fs.existsSync(path.resolve(mainRoot, p)));
+  const missing = row.products.filter((p) => hostOwnProduct(p) && !fs.existsSync(path.resolve(mainRoot, p)));
   const verDrift = declared && declared.version !== undefined && declared.version !== skillVersion(); // 陈旧快照：内容一致但登记版本落后也不许早退——重跑必须刷回版本（2026-09-30 采纳对账纪律）
   // 确认闸（v2.65.0，DEP_ASK_GATE 的机械面）：①已装版本漂移刷新（采纳漂移未经拍板不许落盘）②将整文件覆盖任何已存在
   // 文件（渲染过滤保证只会落在登记产物路径上——项目自有定制副本/本地定制段就在这些路径被静默吃掉，v2.62.0 在案）→
@@ -4081,6 +4117,30 @@ function mechCmd(args = []) {
     fs.chmodSync(e.abs, e.mode);
     renderedChanged = true;
     console.log(`✓ 渲染 ${e.rel}${e.ext === '.sh' ? `（assetExts=${exts}` : '（工具）'}${e.prev === null ? '' : ' 模板已更新→覆盖'}${e.ext === '.sh' ? '）' : ''}`);
+  }
+  // v3.2.0 claude 宿主：hooks 注册幂等合并进 .claude/settings.json——只增删 taskflow 自身条目（command 含渲染文件名者），
+  // 既有条目零触碰；重复运行稳定收敛。settings.json 无法解析时不动文件+手工指路（对齐「坏文件不动」纪律）。
+  if (token === 'TASKFLOW_GUARD' && HOST === 'claude') {
+    const sp = path.join(trackedRoot, '.claude', 'settings.json');
+    const cmdStr = 'node "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/hooks/taskflow-guard-claude.mjs"';
+    let cfg = null;
+    if (fs.existsSync(sp)) {
+      try { cfg = JSON.parse(fs.readFileSync(sp, 'utf8')); } catch { cfg = null; }
+      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
+        console.log(`⚠ .claude/settings.json 无法解析——未改（hooks 请手工注册：PreToolUse matcher Edit|Write|MultiEdit 与 Bash、PreCompact 各一条 command：${cmdStr}）`);
+        cfg = null;
+      }
+    } else { cfg = {}; }
+    if (cfg) {
+      cfg.hooks = cfg.hooks && typeof cfg.hooks === 'object' && !Array.isArray(cfg.hooks) ? cfg.hooks : {};
+      const isTf = (e) => (Array.isArray(e?.hooks) ? e.hooks : []).some((h) => typeof h?.command === 'string' && h.command.includes('taskflow-guard-claude.mjs'));
+      const prune = (k) => { cfg.hooks[k] = Array.isArray(cfg.hooks[k]) ? cfg.hooks[k].filter((e) => !isTf(e)) : []; return cfg.hooks[k]; };
+      prune('PreToolUse').push({ matcher: 'Edit|Write|MultiEdit', hooks: [{ type: 'command', command: cmdStr }] }, { matcher: 'Bash', hooks: [{ type: 'command', command: cmdStr }] });
+      prune('PreCompact').push({ hooks: [{ type: 'command', command: cmdStr }] });
+      fs.mkdirSync(path.dirname(sp), { recursive: true });
+      fs.writeFileSync(sp, JSON.stringify(cfg, null, 2) + '\n');
+      console.log('✓ .claude/settings.json hooks 注册（幂等合并：PreToolUse Edit|Write|MultiEdit + Bash、PreCompact；既有条目未动）');
+    }
   }
   const cl = path.join(trackedRoot, 'docs', 'CHANGELOG.md');
   if (prose) {
@@ -4130,16 +4190,17 @@ function mechCmd(args = []) {
       console.log(`✓ conventions.md 生成节已刷新（v2.57.1 幂等替换——存量镜像随版本自愈）`);
     }
   }
-  const ag = path.join(trackedRoot, 'AGENTS.md');
+  const mirrorName = redlineFile(HOST) || 'AGENTS.md'; // 红线镜像载体随宿主路由（v3.2.0：claude→CLAUDE.md；omp/none 兜底 AGENTS.md 维持旧行为）
+  const ag = path.join(trackedRoot, mirrorName);
   const agText = fs.existsSync(ag) ? fs.readFileSync(ag, 'utf8') : '';
   if (prose) {
     const agMk = prose.agMarkers.find((mk) => agText.includes(mk));
     if (!agMk) {
       fs.writeFileSync(ag, `${agText}${agText && !agText.endsWith('\n') ? '\n' : ''}${prose.agText(day)}`);
-      console.log(`✓ AGENTS.md 红线摘要镜像（${prose.anchor}）`);
+      console.log(`✓ ${mirrorName} 红线摘要镜像（${prose.anchor}）`);
     } else {
       fs.writeFileSync(ag, replaceGenSection(agText, agMk, prose.agText(day)));
-      console.log(`✓ AGENTS.md 生成节已刷新（v2.57.1 幂等替换——存量镜像随版本自愈）`);
+      console.log(`✓ ${mirrorName} 生成节已刷新（v2.57.1 幂等替换——存量镜像随版本自愈）`);
     }
   }
   pj.mechanisms = (pj.mechanisms && typeof pj.mechanisms === 'object' && !Array.isArray(pj.mechanisms)) ? pj.mechanisms : {}; // 非 object 值纠偏（防 ESM 严格模式抛错，2026-09-27 审查 N3）

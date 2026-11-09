@@ -7,7 +7,7 @@
 1. **核心层（SKILL.md ≤60 行）**：只做路由与通用纪律——三铁律、15 条 A 类一行化纪律、确认原则、profile 触点；路由唯一载体=`references/entry-routes.md`（核心零栈私货、零机制代号、零事故叙事）。
 2. **能力包层（packs/）**：栈特有规则与机械面住八包（frontend/jvm-data/deploy/docs-prd/changelog-gates/briefing/carrier/host-adapters），每包 manifest.json+PACK.md；未启用的包连一行都不加载（项目 profile 拍板）；机制机器注册表=`references/schemas/mechanisms.json`（`node scripts/gen-mechanisms.mjs` 生成，doctor I20 对账——改 manifest 必须重生成）。
 3. **项目层（.taskflow/）**：profile.json（确认档位/包启用/任务类型裁剪）+ conventions.md（I19 完备性机械强制）；事故与教训沉淀 decisions/ 与 meta/recurrence.json。
-4. **宿主层（host-adapters 包）**：宿主差异单点=`assets/shared/host-adapter.mjs`；omp guard 住 `.omp/hooks/pre/`，其余宿主降级纯纪律档。
+4. **宿主层（host-adapters 包）**：宿主差异单点=`assets/shared/host-adapter.mjs`；claude guard 四门薄适配住 `.claude/hooks/`（settings.json hooks 注册），其余宿主降级纯纪律档（omp 线住原仓 taskflow）。
 
 ## 红线
 

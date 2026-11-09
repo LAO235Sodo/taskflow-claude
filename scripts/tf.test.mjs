@@ -25,12 +25,6 @@ const sh = (cmd, cwd) => execFileSync('bash', ['-c', cmd], { cwd, stdio: 'ignore
 const TF_HOME_TEST = path.join(tmp, 'tfhome');
 const run = (args, cwd) => spawnSync('node', [script, ...args], { cwd, encoding: 'utf8', env: { ...process.env, TF_HOST: 'omp', TF_TASKFLOW_HOME: TF_HOME_TEST } });
 const runEnv = (args, cwd, env) => spawnSync('node', [script, ...args], { cwd, encoding: 'utf8', env: { ...process.env, TF_HOST: 'omp', TF_TASKFLOW_HOME: TF_HOME_TEST, ...env } });
-// 2.84.1 before_provider_request 真实 payload 形状（活体探针实测：{model, messages, stream, …}——无 system 键，
-// system 住 messages 首条 role:'system'；旧夹具传 {payload:{system}} 走 Anthropic 形分支=真实形状零覆盖，遮蔽注入通道死）
-const BP = (systemContent = 'BASE') => ({ model: 'test-model', messages: [{ role: 'system', content: systemContent }], stream: false });
-const sysJoin = (r) => Array.isArray(r?.messages)
-  ? r.messages.filter((m) => m?.role === 'system').map((m) => (typeof m?.content === 'string' ? m.content : Array.isArray(m?.content) ? m.content.map((c) => c?.text ?? '').join('') : '')).join('\n')
-  : typeof r?.system === 'string' ? r.system : Array.isArray(r?.system) ? r.system.map((b) => b?.text ?? '').join('\n') : '';
 
 try {
   // ---- fixture 搭建 ----
@@ -878,154 +872,14 @@ try {
   // ---- v2.80.0 V 渲染证据提醒夹具（宿主全 handler 链式调用——host-faithful：真实 omp 逐个唤起注册 handler）----
   fs.mkdirSync(path.join(rveRepo, '.taskflow'), { recursive: true });
   fs.writeFileSync(path.join(rveRepo, '.taskflow', 'project.json'), JSON.stringify({ mechanisms: { TASKFLOW_GUARD: { version: '2.80.0' } } }));
-  const vgMod = await import('file://' + path.resolve(import.meta.dirname, '../packs/host-adapters/assets/guard/taskflow-guard.js'));
-  const vgH = {};
-  vgMod.default({ setLabel() {}, on: (ev, fn) => { (vgH[ev] ??= []).push(fn); } });
-  const vgFire = async (toolName, input) => {
-    const outs = [];
-    for (const h of vgH['tool_call'] ?? []) {
-      try { const r = await h({ toolName, input }, { cwd: rveRepo, ui: {} }); if (r?.additionalContext) outs.push(r.additionalContext); } catch { /* 单 handler 失败不连坐 */ }
-    }
-    return outs.join('\n');
-  };
-  const v1 = await vgFire('edit', { path: 'a.vue', old_string: '.a{color:red}', new_string: '.a{color:red}\n@media (min-width: 600px){.a{color:blue}}' });
-  ok(v1.includes('TASKFLOW_GUARD 渲染证据墙'), 'V 渲染证据提醒：样式载体改动+任务分支+无证据 → 弹（每任务一次；看板字体失调打回沉淀）');
-  const v2 = await vgFire('edit', { path: 'a.vue', old_string: '.a{color:red}', new_string: '.a{color:darkred}' });
-  ok(!v2.includes('TASKFLOW_GUARD 渲染证据墙'), 'V 渲染证据提醒：状态标在 → 同任务静默（防逐编辑噪音）');
-  // 三件套之二：逐轮催(before_provider_request)——义务开时每轮请求前置待补行(E 墙同 handler 面,共存断言；2.84.1 起真实 payload 形状)
-  const vgBp = async () => {
-    const outs = [];
-    for (const h of vgH['before_provider_request'] ?? []) {
-      try { const r = await h({ payload: BP('BASE') }, { cwd: rveRepo, ui: {} }); outs.push(sysJoin(r)); }
-      catch { /* 单 handler 失败不连坐 */ }
-    }
-    return outs.join('\n====\n');
-  };
-  const bp1 = await vgBp();
-  ok(bp1.includes('渲染证据待补') && bp1.includes('BASE'), 'V 逐轮催：义务开 → 每轮请求前置待补行（E 墙共存）');
-  // 三件套之三：压缩兜底(session.compacting)——义务开时压缩摘要必含义务未清行
-  const vgCompact = async () => {
-    const outs = [];
-    for (const h of vgH['session.compacting'] ?? []) {
-      try { const r = await h({}, { cwd: rveRepo, ui: {} }); if (r?.context) outs.push(r.context.join('\n')); }
-      catch { /* 单 handler 失败不连坐 */ }
-    }
-    return outs.join('\n====\n');
-  };
-  const cp1 = await vgCompact();
-  ok(cp1.includes('渲染证据义务未清'), 'V 压缩兜底：义务开 → 压缩摘要保留义务线索');
   fs.mkdirSync(path.join(rveRepo, '.taskflow', 't-rve', 'attachments'), { recursive: true });
   fs.writeFileSync(path.join(rveRepo, '.taskflow', 't-rve', 'attachments', 'shot.png'), 'png');
-  const bp2 = await vgBp();
-  ok(!bp2.includes('渲染证据待补'), 'V 逐轮催：证据落位 → 义务清零自动停止');
-  const cp2 = await vgCompact();
-  ok(!cp2.includes('渲染证据义务未清'), 'V 压缩兜底：证据落位 → 线索消失');
   sh('git add -A && git commit -qm "evidence: 附渲染证据"', rveRepo);
   const rveGreen = spawnSync('bash', [RVE, '--task', 't-rve', '--repo', rveRepo, '--base', 'HEAD~1'], { cwd: rveRepo, encoding: 'utf8' });
   ok(rveGreen.status === 0, '渲染证据哨兵：attachments 证据在位 → 绿');
   sh('git checkout -q -b main', rveRepo);
   const rveNA = spawnSync('bash', [RVE, '--repo', rveRepo], { cwd: rveRepo, encoding: 'utf8' });
   ok(rveNA.status === 0 && rveNA.stdout.includes('N/A'), '渲染证据哨兵：非任务上下文 → 绿 N/A');
-
-  // ---- v2.84.0 U 状态引导注入夹具（host-faithful：真实 handler 链式调用；三态引导行+子任务清单+翻转埋点+开关+逐字节稳定）----
-  {
-    delete process.env.TF_STATE_INJECT;
-    delete process.env.TF_GUARD_LOG;
-    const sRepo = path.join(tmp, 'state-inject-proj');
-    fs.mkdirSync(sRepo, { recursive: true });
-    sh('git init -q -b main && git config user.email t@t && git config user.name t', sRepo);
-    fs.writeFileSync(path.join(sRepo, 'a.txt'), 'a\n');
-    sh('git add -A && git commit -qm init', sRepo);
-    const mkT = (id, extra) => {
-      fs.mkdirSync(path.join(sRepo, '.taskflow', id), { recursive: true });
-      fs.writeFileSync(path.join(sRepo, '.taskflow', id, 'task.json'), J({ id, title: id, status: 'active', subtasks: [], ...extra }));
-    };
-    mkT('si-active-20260101', {
-      sessionID: 'ses_SI',
-      subtasks: [
-        { id: '1', title: '已完成子任务', status: 'done', spec: null, worktree: null, branch: null },
-        { id: '2', title: '进行中子任务', status: 'in_progress', spec: null, worktree: null, branch: null },
-        { id: '3', title: '待办子任务', status: 'pending', spec: null, worktree: null, branch: null },
-      ],
-    });
-    mkT('si-verify-20260101', { status: 'verifying', deploy: { status: 'verifying', deployedAt: '2026-01-01T10:00:00+08:00' } });
-    const siReason = '等产品拍板接口口径\n第二行很长很长很长很长很长超出二十字';
-    mkT('si-park-20260101', { status: 'parked', parkedReason: siReason });
-    fs.mkdirSync(path.join(sRepo, '.taskflow'), { recursive: true });
-    fs.writeFileSync(path.join(sRepo, '.taskflow', 'index.json'), J({ tasks: [
-      { id: 'si-active-20260101', status: 'active' },
-      { id: 'si-verify-20260101', status: 'verifying' },
-      { id: 'si-park-20260101', status: 'parked' },
-    ] }));
-    fs.writeFileSync(path.join(sRepo, '.taskflow', 'project.json'), JSON.stringify({ mechanisms: { TASKFLOW_GUARD: { version: '2.84.0' } } }));
-    const bpC = async (cwd, sessFile) => { // E+V 双 handler 全链收集（E 是首位；V 在本夹具无 .v-wall 不出声）；2.84.1 起真实 payload 形状
-      const outs = [];
-      for (const h of vgH['before_provider_request'] ?? []) {
-        try {
-          const r = await h({ payload: BP('BASE') }, { cwd, ui: {}, sessionManager: sessFile ? { getSessionFile: () => sessFile } : {} });
-          outs.push(sysJoin(r));
-        } catch { /* 单 handler 失败不连坐 */ }
-      }
-      return outs.join('\n====\n');
-    };
-    const bpRaw = async (cwd, sessFile) => { // 2.84.1 通道断言用：取 E handler 原始返回（看 messages 头插形态）
-      for (const h of vgH['before_provider_request'] ?? []) {
-        try { return await h({ payload: BP('BASE') }, { cwd, ui: {}, sessionManager: sessFile ? { getSessionFile: () => sessFile } : {} }); } catch { return undefined; }
-      }
-      return undefined;
-    };
-    const sessFile = path.join(sRepo, 'ses_SI.jsonl');
-    const g1 = await bpC(sRepo, sessFile);
-    const siBrief = siReason.replace(/[\r\n|]+/g, ' ').trim().slice(0, 20);
-    ok(g1.includes('[taskflow 状态引导（TASKFLOW_GUARD；状态翻转只经脚本命令，禁手改 status）]'), '2.84.0 U 状态引导：引导块随实况行注入');
-    ok(g1.includes('- si-active-20260101（active，实现中）：改动先 checkpoint；收尾走 merge 流程，本会话'), '2.84.0 U 状态引导：active 引导行+（本会话）标注（sessionID 匹配夹具会话）');
-    ok(g1.includes('  si-active-20260101 子任务待办：') && g1.includes('  - [ ] 待办子任务') && g1.includes('  - [ ] 进行中子任务（进行中）'), '2.84.0 U 状态引导：未完成子任务清单+in_progress 标注');
-    ok(!g1.includes('已完成子任务'), '2.84.0 U 状态引导：done 子任务不列');
-    ok(g1.includes('- si-verify-20260101（verifying，等用户验收）：验收只经 tf.mjs accept si-verify-20260101 --pass；禁自行合并'), '2.84.0 U 状态引导：verifying 引导行（部署时刻不重复，实况行已显示）');
-    ok(g1.includes(`- si-park-20260101（parked，挂起：${siBrief}…）：恢复只经 tf.mjs unpark si-park-20260101`) && !g1.includes('第二行很长很长很长很长很长超出二十字'), '2.84.0 U 状态引导：parked 原因换行折叠+20 字截断');
-    ok(g1.includes('taskflow 实况：活 si-active-20260101') && g1.includes('等验收 si-verify-20260101（部署 01-01 10:00）'), '2.84.0 U 状态引导：既有实况行保留（verifying 部署时刻在实况行）');
-    const g1b = await bpC(sRepo, sessFile);
-    ok(g1b === g1, '2.84.0 U 状态引导：连续两次调用逐字节相同（cache warming byte-identical）');
-    // ---- 2.84.1 通道断言：注入落点=messages 头插 system 角色消息（真实 payload 无 system 键——活体探针实测，
-    // 旧 p.system 写入被传输层丢弃，E/U/V 三墙 2.54.0/2.80.0/2.84.0 起静默 no-op；本块在 v2.84.1 修复前必红）----
-    const g1r = await bpRaw(sRepo, sessFile);
-    ok(Array.isArray(g1r?.messages) && g1r.messages[0]?.role === 'system' && typeof g1r.messages[0].content === 'string' && g1r.messages[0].content.startsWith('[面向用户输出规范'), '2.84.1 通道修复：messages 头插——payload.messages[0]={role:system} 且 content 以输出规范块开头（主形态）');
-    ok(String(g1r.messages[0].content).includes('[taskflow 状态引导') && String(g1r.messages[0].content).includes('taskflow 实况：'), '2.84.1 通道修复：注入 content 含引导块+实况行');
-    ok(g1r.messages.some((m) => m?.role === 'system' && m.content === 'BASE') && g1r.messages.length === 2, '2.84.1 通道修复：原 system 消息保留（头插非替换；新数组不原地 mutate）');
-    ok(g1r.system === undefined, '2.84.1 通道修复：真实形态下不写 payload.system 键（死形态兜底已删）');
-    // ---- 2.84.1 「，本会话」标注匹配修复：omp 会话文件名=时间戳_uuid，task.json.sessionID 存真实会话 id（uuid）或
-    // 人读标签——旧 stripped===sessionID 精确相等恒不命中（2.84.0 起标注永不亮，2026-10-29 对抗审查实锤）----
-    const uuidSess = '01a18332-1540-700b-8e5b-a09e7d047126';
-    const tsSessFile = `/x/2026-10-28T15-47-39-968Z_${uuidSess}.jsonl`;
-    const siTjLabelP = path.join(sRepo, '.taskflow', 'si-active-20260101', 'task.json');
-    const siTjLabelOrig = fs.readFileSync(siTjLabelP, 'utf8');
-    const markWith = async (sid, sf) => { // 临时改 sessionID 跑一轮后还原（不污染后续翻转埋点夹具状态）
-      const o = JSON.parse(siTjLabelOrig); o.sessionID = sid; fs.writeFileSync(siTjLabelP, J(o));
-      const t = await bpC(sRepo, sf);
-      fs.writeFileSync(siTjLabelP, siTjLabelOrig);
-      return t;
-    };
-    const gUuid = await markWith(uuidSess, tsSessFile);
-    ok(gUuid.includes('- si-active-20260101（active，实现中）：改动先 checkpoint；收尾走 merge 流程，本会话'), '2.84.1 本会话标注：时间戳_uuid 会话文件名 + task.json.sessionID=uuid 全串 → 「，本会话」亮（下划线后缀匹配）');
-    const gLabel = await markWith('stuck-state-guard', tsSessFile);
-    ok(!gLabel.includes('，本会话'), '2.84.1 本会话标注：人读标签与时间戳_uuid 文件名不匹配 → 不亮（诚实降级无标注，禁误标）');
-    process.env.TF_STATE_INJECT = 'off';
-    const g2 = await bpC(sRepo, sessFile);
-    delete process.env.TF_STATE_INJECT;
-    ok(!g2.includes('[taskflow 状态引导') && g2.includes('taskflow 实况：活 si-active-20260101'), '2.84.0 U 状态引导：TF_STATE_INJECT=off 关引导块留实况行（回退 2.83.0 行为）');
-    const logP = path.join(sRepo, '.taskflow', '.guard-log.jsonl');
-    const readLog = (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : []); // 2.84.1：文件不存在按 0 行计（治变异跑 ENOENT 崩溃掩盖断言）
-    const before = readLog(logP).length;
-    const siTjP = path.join(sRepo, '.taskflow', 'si-active-20260101', 'task.json');
-    const siTj = JSON.parse(fs.readFileSync(siTjP, 'utf8'));
-    siTj.status = 'verifying';
-    fs.writeFileSync(siTjP, JSON.stringify(siTj, null, 2) + '\n');
-    await bpC(sRepo, sessFile);
-    const logLines = readLog(logP);
-    ok(logLines.length === before + 1 && logLines.some((l) => l.includes('"gate":"state-inject"') && l.includes('"action":"transition"') && l.includes('si-active-20260101: active→verifying')), '2.84.0 U 翻转埋点：状态翻转 → guardLog gate=state-inject 一行（每任务一行）');
-    await bpC(sRepo, sessFile);
-    ok(readLog(logP).length === before + 1, '2.84.0 U 翻转埋点：指纹未变不增行');
-  }
 
   // ---- v2.84.0 回退传播加固夹具（V1 受影响任务/V2 对账 ref 本地优先/V4 嵌套标注/V3 快照门黄路加严）----
   {
@@ -1993,230 +1847,6 @@ try {
   fs.writeFileSync(path.join(gproj2, '.taskflow', 'project.json'), J({ key: 'mechphantom', git: false, mechanisms: {} }));
   const ph = run(['mech', 'install', '可行性门'], gproj2);
   ok(ph.status === 0 && ph.stdout.includes('纯编排层机制，无需 install') && !fs.existsSync(path.join(gproj2, 'scripts')), 'mech 幻影产物（v2.54.0）：—（说明）形式产物过滤 → 纯编排层短路，零渲染零假漂移（旧版整串当产物名=永久漂移标签）');
-  const instG = run(['mech', 'install', 'TASKFLOW_GUARD'], gproj);
-  const guardPath = path.join(gproj, '.omp', 'hooks', 'pre', 'taskflow-guard.js');
-  ok(instG.status === 0 && fs.existsSync(guardPath), 'TASKFLOW_GUARD mech install：extension 渲染到 .omp/hooks/pre/taskflow-guard.js');
-  const guardMod = await import('file://' + guardPath);
-  const handlers = {};
-  const statusCalls = [];
-  const mockPi = { setLabel() {}, on: (ev, fn) => { (handlers[ev] ??= []).push(fn); } };
-  const mkCtx = () => ({ cwd: gproj, ui: { setStatus: (k, t) => statusCalls.push([k, t]) } });
-  guardMod.default(mockPi);
-  const call = async (ev, event) => handlers[ev]?.[0]?.(event, mkCtx());
-  await call('session_start', {});
-  ok(statusCalls.some(([k, t]) => k === 'tf' && t.includes('进行中1') && t.includes('等你验收1') && t.includes('1个已上线超24小时未合并')), 'TASKFLOW_GUARD D：状态栏常显进行中+等你验收+已上线超24小时未合并（超 24h 判定，v2.56.0 人话化）');
-  const comp = await call('session.compacting', {});
-  ok(Array.isArray(comp?.context) && comp.context.some((s) => s.includes('g-live-20260101')) && comp.context.some((s) => s.includes('接力')), 'TASKFLOW_GUARD C：压缩摘要注入活任务接力线索');
-  const b1 = await call('tool_call', { toolName: 'bash', input: { command: 'node tf.mjs commit -m x --files a.md b.md' } });
-  ok(b1?.block === true && /逗号/.test(b1.reason), 'TASKFLOW_GUARD B1：--files 空格分隔多文件 → 调用即红（block+提示逗号）');
-  const b2 = await call('tool_call', { toolName: 'bash', input: { command: 'node tf.mjs deploy --branch main' } });
-  ok(b2?.additionalContext && /web-only/.test(b2.additionalContext), 'TASKFLOW_GUARD B2：deploy 缺 --web-only 且项目有 webCommands → 提醒注入');
-  const aWarn = await call('tool_call', { toolName: 'bash', input: { command: 'rsync -a dist/ test-host:/opt/app/web/' } });
-  ok(aWarn?.additionalContext && /部署墙/.test(aWarn.additionalContext) && !aWarn.block, 'TASKFLOW_GUARD A：部署特征命令默认警告（additionalContext 不 block）');
-  process.env.TF_WALL = 'enforce';
-  const aBlock = await call('tool_call', { toolName: 'bash', input: { command: "ssh test-host 'systemctl restart myapp'" } });
-  delete process.env.TF_WALL;
-  ok(aBlock?.block === true, 'TASKFLOW_GUARD A enforce：TF_WALL=enforce 时部署特征命令硬拦');
-  process.env.TF_WALL = 'off';
-  const aOff = await call('tool_call', { toolName: 'bash', input: { command: 'scp app.jar test-host:/opt/app/app.jar' } });
-  delete process.env.TF_WALL;
-  const pass = await call('tool_call', { toolName: 'bash', input: { command: 'git status --short' } });
-  ok(aOff === undefined && pass === undefined, 'TASKFLOW_GUARD 边界：TF_WALL=off 放行 + 普通命令零干扰');
-  // ---- v2.52.0 guard 收紧回归（对抗审查：A 组合命令绕过 / B2 只读提及误触——本会话活体两次误触实证）----
-  const aCombo = await call('tool_call', { toolName: 'bash', input: { command: 'node tf.mjs deploy --dry-run && rsync -a dist/ test-host:/opt/app/web/' } });
-  ok(aCombo?.additionalContext && /部署墙/.test(aCombo.additionalContext), 'TASKFLOW_GUARD A 分段判定：组合命令后段 rsync 夹带 → 仍警告（旧版全串含 tf.mjs+deploy 整体放行）');
-  const b2ro = await call('tool_call', { toolName: 'bash', input: { command: "grep -n 'deploy' scripts/tf.mjs | head -5" } });
-  ok(b2ro === undefined, 'TASKFLOW_GUARD B2 收紧：只读 grep 提及 deploy → 不再误触（旧版全串子串级判定）');
-  fs.writeFileSync(path.join(gproj, '.taskflow', 'glossary.md'), '# 项目词表\n\n| 行话 | 大白话 | 锚词 |\n| --- | --- | --- |\n| 签名册 | 部署记录表，每次上线记一行 | 部署记录表 |\n');
-  // ---- 2.84.1 注入通道三形态（主=messages 头插；兼容=Anthropic 形字符串/blocks；未知形态 undefined）----
-  const injMsg = await call('before_provider_request', { payload: BP('BASE-PROMPT') });
-  ok(Array.isArray(injMsg?.messages) && injMsg.messages[0]?.role === 'system' && typeof injMsg.messages[0].content === 'string' && injMsg.messages[0].content.startsWith('[面向用户输出规范') && injMsg.messages[0].content.includes('签名册=部署记录表') && injMsg.messages[0].content.includes('括号大白话'), 'TASKFLOW_GUARD E 主形态：输出规范+项目词表头插 system 角色消息（原文保留、词表活读、括号大白话口径锚；2.84.1 通道修复——真实 payload 无 system 键，旧 p.system 写入被传输层丢弃=静默 no-op）');
-  ok(injMsg.messages.some((m) => m?.role === 'system' && m.content === 'BASE-PROMPT') && injMsg.messages.length === 2, 'TASKFLOW_GUARD E 主形态：原 system 消息保留（头插非替换）');
-  const inj = await call('before_provider_request', { payload: { model: 'test-model', system: 'BASE-PROMPT-STR', stream: false } }); // Anthropic 形传输回落（无 messages 键）
-  ok(typeof inj?.system === 'string' && inj.system.startsWith('[面向用户输出规范') && inj.system.includes('BASE-PROMPT-STR') && inj.system.includes('签名册=部署记录表') && inj.system.includes('括号大白话'), 'TASKFLOW_GUARD E 兼容①：字符串 system 前置（原文保留、词表活读；Anthropic 形传输回落）');
-  const injArr = await call('before_provider_request', { payload: { system: [{ type: 'text', text: 'BASE2' }] } }); // Anthropic 形 blocks 回落
-  ok(Array.isArray(injArr?.system) && injArr.system[0].text.startsWith('[面向用户输出规范') && injArr.system.some((b) => b.text === 'BASE2'), 'TASKFLOW_GUARD E 兼容②：system 数组形态——注入块前插、原块保留');
-  const injUnknown = await handlers['before_provider_request']?.[0]?.({ payload: { model: 'test-model' } }, mkCtx()); // 未知传输形态：无 messages 无 system
-  ok(injUnknown === undefined, 'TASKFLOW_GUARD E 未知形态：payload 无 messages 无 system → undefined 不注入不炸（2.84.1 删 p.system 兜底死形态——写入被传输层丢弃）');
-  const injNone = await handlers['before_provider_request']?.[0]?.({ payload: { system: 'X' } }, { cwd: tmp, ui: {} });
-  ok(injNone === undefined, 'TASKFLOW_GUARD E 零干扰：非 taskflow 项目不注入');
-  // ---- v2.54.0 采纳面自检（对抗审查：任意 token install 渲染 guard，未采纳项目被误伤）----
-  const gprojPj = JSON.parse(fs.readFileSync(path.join(gproj, '.taskflow', 'project.json'), 'utf8'));
-  delete gprojPj.mechanisms.TASKFLOW_GUARD;
-  fs.writeFileSync(path.join(gproj, '.taskflow', 'project.json'), JSON.stringify(gprojPj));
-  const gateOff = await call('tool_call', { toolName: 'bash', input: { command: 'node tf.mjs commit -m x --files a.md b.md' } });
-  ok(gateOff === undefined, 'TASKFLOW_GUARD 采纳闸：登记被清 → 八功能整体静默（B1 不再硬拦；卸载=删文件或清登记皆可）');
-  gprojPj.mechanisms.TASKFLOW_GUARD = { adoptedAt: now, version: 'test' };
-  fs.writeFileSync(path.join(gproj, '.taskflow', 'project.json'), JSON.stringify(gprojPj));
-
-  // ---- 2.89.0 DP deployment 落档校验：mock pi 真执行（出枚举 block/占位 block/合法零干扰/降级提醒四路；
-  // 遍历全 tool_call handler 取结果——不依赖下标，防既有下标定位脆断）----
-  const dpFire = async (toolName, input) => {
-    let out;
-    for (const h of handlers['tool_call'] ?? []) { const r = await h({ toolName, input }, mkCtx()); if (r) out = r; }
-    return out;
-  };
-  const dpPjBase = JSON.parse(fs.readFileSync(path.join(gproj, '.taskflow', 'project.json'), 'utf8'));
-  const dpContent = (deployment) => JSON.stringify({ ...dpPjBase, ...(deployment === undefined ? {} : { deployment }) }, null, 2);
-  const dpProj = path.join(gproj, '.taskflow', 'project.json');
-  const dpBad = await dpFire('write', { path: dpProj, content: dpContent({ tier: 'k8s-native', environments: 'dual', verify: '集群内验证' }) });
-  ok(dpBad?.block === true && /deployment 落档校验/.test(dpBad.reason) && dpBad.reason.includes('middleware-shared|self-contained') && dpBad.reason.includes('你落的值哪来的'), '2.89.0 guard DP：tier 出枚举 → block+人话（合法值话术由渲染期注入的 schema 枚举生成——单源非手抄）');
-  const dpPh = await dpFire('edit', { path: dpProj, old_string: 'x', new_string: '"deployment": { "tier": "self-contained", "environments": "dual", "verify": "<一句话，未答不落盘>" }' });
-  ok(dpPh?.block === true && /占位/.test(dpPh.reason), '2.89.0 guard DP：verify 照抄示例占位符 → block（edit 片段括号配对提取）');
-  const dpOk = await dpFire('write', { path: dpProj, content: dpContent({ tier: 'middleware-shared', environments: 'single', verify: 'none' }) });
-  ok(dpOk === undefined, '2.89.0 guard DP：合法三键 → 零干扰放行');
-  const dpNoDep = await dpFire('write', { path: dpProj, content: dpContent(undefined) });
-  ok(dpNoDep === undefined, '2.89.0 guard DP：写 project.json 无 deployment 节 → 零干扰');
-  const dpOff = await dpFire('write', { path: path.join(gproj, 'src', 'project.json'), content: '{"deployment":{"tier":"bogus"}}' });
-  ok(dpOff?.block == null && !/deployment 落档校验/.test(String(dpOff?.additionalContext ?? dpOff?.reason ?? '')), '2.89.0 guard DP：非 .taskflow/ 的同名 project.json → 本门零干扰（命中泛名提醒属 W 牵连排查另一功能面，不判 deployment）');
-  // 降级路：模板原样（DEPLOYMENT_ENUMS 未注入=null）→ 只提醒确认纪律不判值（不 block、话术零枚举抄写）
-  const dgH = {};
-  vgMod.default({ setLabel() {}, on: (ev, fn) => { (dgH[ev] ??= []).push(fn); } });
-  let dgOut;
-  for (const h of dgH['tool_call'] ?? []) { const r = await h({ toolName: 'write', input: { path: dpProj, content: dpContent({ tier: 'k8s-native', environments: 'dual', verify: 'x' }) } }, mkCtx()); if (r) dgOut = r; }
-  ok(dgOut?.block == null && /三键（tier\/environments\/verify）必须经用户确认/.test(dgOut?.additionalContext ?? '') && !String(dgOut?.additionalContext).includes('middleware-shared'), '2.89.0 guard DP 降级：枚举未注入（模板原样）→ 只提醒不判值且话术不含枚举值（勿造第二份抄写）');
-  // 渲染契约：模板带占位符、渲染副本枚举已注入且零占位残留
-  const gTpl = fs.readFileSync(path.resolve(import.meta.dirname, '../packs/host-adapters/assets/guard/taskflow-guard.js'), 'utf8');
-  const gRen = fs.readFileSync(guardPath, 'utf8');
-  ok(gTpl.includes('__DEPLOYMENT_ENUMS__') && !gRen.includes('__DEPLOYMENT_ENUMS__') && gRen.includes('"middleware-shared"') && gRen.includes('"self-contained"'), '2.89.0 guard 渲染契约：模板带占位符、渲染副本枚举已从 schema 注入且零残留');
-
-  // ---- v2.48.0 F 派发门 + G 编辑边界门：mock pi 真执行（硬规则 17——校验/注入/边界三路径）----
-  const fcall = async (event) => handlers['tool_call']?.[1]?.(event, mkCtx());
-  const gcall = async (event) => handlers['tool_call']?.[2]?.(event, mkCtx());
-  fs.mkdirSync(path.join(gproj, '.taskflow', 'g-live-20260101', 'subtasks', '1-impl'), { recursive: true });
-  fs.writeFileSync(path.join(gproj, '.taskflow', 'g-live-20260101', 'task.json'), J({ id: 'g-live-20260101', title: '活任务', status: 'active', worktree: gproj }));
-  fs.writeFileSync(path.join(gproj, '.taskflow', 'g-live-20260101', 'spec.md'), [
-    '# Spec — 活任务', '',
-    '## 目标', '', '改一个文件。', '',
-    '## 验收标准', '', '- [ ] 好（验证：x）', '',
-    '## 边界与影响面', '', '- `src/in-scope.ts`（主清单）', '',
-  ].join('\n'));
-  fs.writeFileSync(path.join(gproj, '.taskflow', 'g-live-20260101', 'subtasks', '1-impl', 'spec.md'), [
-    '# Subtask 1 — impl', '',
-    '## 背景（一句话）', '', '整体里的位置。', '',
-    '## 目标', '', '实现 X。', '',
-    '## 验收', '', '- [ ] 通过（验证：node x）', '',
-    '## 涉及文件', '', '- `src/in-scope.ts`（实现）', '',
-    '## 约束与禁止', '', '- 禁止改动：其他文件', '',
-  ].join('\n'));
-  const f1 = await fcall({ toolName: 'task', input: { context: 'ctx', tasks: [{ name: 'Impl', task: '实现票 1，spec 见 .taskflow/g-live-20260101/subtasks/1-impl/spec.md' }] } });
-  ok(f1?.input?.tasks?.[0]?.task.includes('派发门') && f1.input.tasks[0].task.includes('## 约束与禁止') && f1.input.tasks[0].task.includes('工作目录（worktree）') && f1.input.tasks[0].task.includes('实现票 1'), 'TASKFLOW_GUARD F1：引用合法 subtask spec → {input} 机械注入 spec 全文+worktree+原派发词保留');
-  ok(f1.input.context === 'ctx' && f1.input.tasks[0].name === 'Impl', 'TASKFLOW_GUARD F1：input 其余字段原样保留（增量替换不删减）');
-  const f2a = await fcall({ toolName: 'task', input: { tasks: [{ task: '见 .taskflow/g-live-20260101/subtasks/9-x/spec.md' }] } });
-  ok(f2a?.block === true && /不存在/.test(f2a.reason), 'TASKFLOW_GUARD F2：引用不存在的 spec → block 点名路径');
-  fs.mkdirSync(path.join(gproj, '.taskflow', 'g-live-20260101', 'subtasks', '2-bad'), { recursive: true });
-  fs.writeFileSync(path.join(gproj, '.taskflow', 'g-live-20260101', 'subtasks', '2-bad', 'spec.md'), '# Subtask 2 — bad\n\n## 背景\n\nx。\n\n## 目标\n\ny。\n\n## 验收\n\n- [ ] z（验证：q）\n\n## 涉及文件\n\n- `src/bad.ts`（占位）\n');
-  const f2b = await fcall({ toolName: 'task', input: { tasks: [{ task: '见 .taskflow/g-live-20260101/subtasks/2-bad/spec.md' }] } });
-  ok(f2b?.block === true && /约束与禁止/.test(f2b.reason), 'TASKFLOW_GUARD F2：必填节缺失（约束与禁止）→ block 点名缺失节');
-  const f3 = await fcall({ toolName: 'task', input: { tasks: [{ task: '调研一下目录结构并汇报' }] } });
-  ok(f3?.additionalContext && /spec\.md/.test(f3.additionalContext) && !f3.block, 'TASKFLOW_GUARD F3：未引用 spec 的派发 → 提醒注入不拦（调研/审查类合法）');
-  const f3none = await handlers['tool_call']?.[1]?.({ toolName: 'task', input: { tasks: [{ task: 'research' }] } }, { cwd: tmp, ui: {} });
-  ok(f3none === undefined, 'TASKFLOW_GUARD F3 零干扰：非 taskflow 项目的 task 派发放行');
-  const g1 = await gcall({ toolName: 'edit', input: { path: 'src/outside.ts' } });
-  ok(g1?.additionalContext && /编辑边界门/.test(g1.additionalContext) && /g-live-20260101/.test(g1.additionalContext) && !g1.block && !String(g1.additionalContext).includes('⚠ ⚠'), 'TASKFLOW_GUARD G1：越界 edit 默认警告（点名任务与文件；v2.56.2 单 ⚠ 锚——warn 档不得双警告符）');
-  process.env.TF_BOUND = 'enforce';
-  const g1e = await gcall({ toolName: 'write', input: { path: 'src/outside.ts' } });
-  delete process.env.TF_BOUND;
-  ok(g1e?.block === true, 'TASKFLOW_GUARD G1 enforce：TF_BOUND=enforce 越界写硬拦');
-  process.env.TF_BOUND = 'off';
-  const g1o = await gcall({ toolName: 'edit', input: { path: 'src/outside.ts' } });
-  delete process.env.TF_BOUND;
-  const g2 = await gcall({ toolName: 'edit', input: { path: 'src/in-scope.ts' } });
-  const g2b = await gcall({ toolName: 'write', input: { path: '.taskflow/g-live-20260101/progress.md' } });
-  const g2none = await handlers['tool_call']?.[2]?.({ toolName: 'edit', input: { path: 'src/x.ts' } }, { cwd: tmp, ui: {} });
-  ok(g1o === undefined && g2 === undefined && g2b === undefined && g2none === undefined, 'TASKFLOW_GUARD G2：TF_BOUND=off 放行 + 清单内/簿记白名单/非 taskflow 全放行');
-  // 审查修复回归（merge 第 3 步两个 blocker）：
-  const f0 = await handlers['tool_call']?.[1]?.({ toolName: 'task', input: { tasks: [{ task: '见 .taskflow/g-x/spec.md' }] } }, { cwd: tmp, ui: {} });
-  ok(f0 === undefined, 'TASKFLOW_GUARD F 零干扰：非 taskflow 项目派发词引用 spec 路径 → 放行（不校验不注入不 block）');
-  const sibOut = await gcall({ toolName: 'edit', input: { path: path.join(gproj + '-1-impl', 'src', 'outside.ts') } });
-  const sibIn = await gcall({ toolName: 'edit', input: { path: path.join(gproj + '-1-impl', 'src', 'in-scope.ts') } });
-  ok(sibOut?.additionalContext && /编辑边界门/.test(sibOut.additionalContext) && sibIn === undefined, 'TASKFLOW_GUARD G 兄弟 worktree：base 取子 worktree 根——越界警告/清单内放行（原实现 rel 恒以 .. 开头=死路）');
-  // ---- v2.52.0 G 负面清单排除回归（文档与注释早已宣称、代码缺失——入清单=放行禁改文件）----
-  fs.writeFileSync(path.join(gproj, '.taskflow', 'g-live-20260101', 'spec.md'), [
-    '# Spec — 活任务', '',
-    '## 目标', '', '改一个文件。', '',
-    '## 验收标准', '', '- [ ] 好（验证：x）', '',
-    '## 边界与影响面', '', '- `src/in-scope.ts`（主清单）', '- 涉及文件不含 `src/forbidden.ts`，明确禁止改动', '',
-  ].join('\n'));
-  const gNeg = await gcall({ toolName: 'edit', input: { path: 'src/forbidden.ts' } });
-  ok(gNeg?.additionalContext && /编辑边界门/.test(gNeg.additionalContext), 'TASKFLOW_GUARD G 负面清单：明确禁止行中的路径不入清单 → 编辑它仍越界警告（旧版收入清单=放行禁改文件）');
-  const gTilde = await gcall({ toolName: 'edit', input: { path: '~/.config/openedge/some-file.ts' } });
-  ok(gTilde === undefined, 'TASKFLOW_GUARD G 波浪号（v2.54.1）：~/ 路径按主目录展开后无归属 → 零干扰放行（旧版 resolve 不展开 ~ 拼成 <cwd>/~/x 误报越界——另一 agent 会话 4 次误报实证）');
-  // ---- v2.49.1 TASKFLOW_GUARD 同类排查提醒（事件面重设计：context——活体实证 tool_result(task) 只有 spawn 回执）----
-  const hcall = async (msgs, cwd = gproj) => handlers['context']?.[0]?.({ messages: msgs }, { cwd, ui: {} });
-  const mkMsg = (role, text) => ({ role, content: [{ type: 'text', text }] });
-  const h1 = await hcall([mkMsg('user', '继续'), mkMsg('assistant', '<task-result id="a1" agent="scout" status="completed">…{"blockers":["G 死路"]}…</task-result>')]);
-  ok(Array.isArray(h1?.messages) && h1.messages.length === 3 && h1.messages[2].role === 'user' && /同类排查/.test(String(h1.messages[2].content)) && /可能猜错/.test(String(h1.messages[2].content)) && String(h1.messages[2].content).includes('按关键词在代码里搜索') && !/报了阻塞项/.test(String(h1.messages[2].content)), 'TASKFLOW_GUARD 同类排查提醒：子代理报告进 context 链（chunk 数组，带属性 task-result 形态——2026-10-13 探针实证信封）→ 追加三问提醒消息（含「同类排查」「可能猜错」，grep 带括号白话，无旧措辞「报了阻塞项」），原消息保留');
-  const h1b = await hcall([mkMsg('user', '继续'), mkMsg('assistant', '报告 blockers:2'), { role: 'user', content: '⚠ TASKFLOW_GUARD 同类排查提醒：已提醒过' }]);
-  ok(h1b === undefined, 'TASKFLOW_GUARD 同类排查提醒 幂等+来源限定：无标签消息不武装，尾部已有提醒标记亦不追加');
-  const h2 = await hcall([mkMsg('user', '正常完成')]);
-  const h4 = await hcall([mkMsg('assistant', 'blocker')], tmp);
-  const h6 = await hcall(null);
-  ok(h2 === undefined && h4 === undefined && h6 === undefined, 'TASKFLOW_GUARD 同类排查提醒 边界：无特征 / 非 taskflow / 空 messages 全静默');
-  const h5 = await hcall([{ role: 'assistant', content: '<task-result>报告 blocking issues 2 个</task-result>' }]);
-  ok(Array.isArray(h5?.messages) && h5.messages.length === 2, 'TASKFLOW_GUARD 同类排查提醒 变体：task-result 无属性形态 + string content + blocking 一词在标签内命中 → 注入');
-  // ---- v2.61.0 触发源收紧（来源限定）：非 task-result 来源一律静默——旧全文扫描曾自我喂养连续 8~10 轮（两会话实证）----
-  const h8 = await hcall([mkMsg('user', '继续'), mkMsg('assistant', '任务无 blockers，一切正常')]);
-  ok(h8 === undefined, 'TASKFLOW_GUARD 同类排查提醒 v2.61.0 翻转旧 h7：assistant 否定语境（无 blockers）→ 静默（旧版注入且被钉成已知良性噪音，现改判负例）');
-  const h9 = await hcall([mkMsg('user', '继续'), mkMsg('assistant', '我在排查并修复阻塞问题，进展顺利')]);
-  ok(h9 === undefined, 'TASKFLOW_GUARD 同类排查提醒 v2.61.0：编排模型自述含「阻塞」→ 静默（无 task-result 标签，不再武装——旧版自我喂养主源）');
-  const h10 = await hcall([mkMsg('user', '这个任务卡住了，先停一下')]);
-  ok(h10 === undefined, 'TASKFLOW_GUARD 同类排查提醒 v2.61.0：user 消息含「卡住」→ 静默（用户陈述不触发）');
-  const h11 = await hcall([mkMsg('user', '⛔ 需你决策 3 项 ⚠ 敞口 2')]);
-  ok(h11 === undefined, 'TASKFLOW_GUARD 同类排查提醒 v2.61.0：工具图例符号（⛔/⚠）无特征词 → 静默');
-  const h12 = await hcall([mkMsg('user', '继续'), mkMsg('assistant', '<task-result>{"blockers":[1]}</task-result>'), { role: 'user', content: '⚠ TASKFLOW_GUARD 同类排查提醒：提醒文本本身含阻塞/blocker 字样' }]);
-  ok(h12 === undefined, 'TASKFLOW_GUARD 同类排查提醒 v2.61.0 自我喂养切断：真实报告触发一轮后，自家提醒（无 task-result 标签）不再重新武装');
-  const h13 = await hcall([mkMsg('user', '⚠ TASKFLOW_GUARD 同类排查提醒：旧提醒'), mkMsg('assistant', '继续讨论阻塞话题'), mkMsg('user', '图例行 ⛔')]);
-  ok(h13 === undefined, 'TASKFLOW_GUARD 同类排查提醒 v2.61.0：提醒老化出尾部后，普通对话含「阻塞」也不复活');
-
-  // ---- v2.57.0 TASKFLOW_GUARD 词表反馈沉淀（用户拍板「逐轮催+压缩兜底」——正/负/消账/压缩/渲染源锚真跑）----
-  const icall = async (msgs, cwd) => handlers['context']?.[1]?.({ messages: msgs }, cwd ? { cwd, ui: {} } : mkCtx());
-  const sedcall = async (tn, p) => handlers['tool_call']?.[3]?.({ toolName: tn, input: { path: p } }, mkCtx());
-  await icall([mkMsg('user', '这段术语太多，我看不懂')]);
-  const i1 = await call('before_provider_request', { payload: BP('BASE') });
-  ok(typeof sysJoin(i1) === 'string' && sysJoin(i1).includes('词表反馈沉淀') && sysJoin(i1).includes('1 条') && sysJoin(i1).includes('BASE'), 'TASKFLOW_GUARD I1 正路：user「看不懂」反馈 → 输出规范通道追加沉淀指令（含计数，原 system 与规范块保留）');
-  await icall([mkMsg('user', '这段术语太多，我看不懂')]);
-  const i1b = await call('before_provider_request', { payload: BP('BASE') });
-  ok(sysJoin(i1b).includes('1 条'), 'TASKFLOW_GUARD I1 去重：context 重放同消息不重复计数');
-  await icall([mkMsg('user', '还是没看懂第二步'), mkMsg('user', '什么意思啊这个')]);
-  const i1c = await call('before_provider_request', { payload: BP('BASE') });
-  ok(sysJoin(i1c).includes('3 条'), 'TASKFLOW_GUARD I1 累计：不同反馈各计一次（3 条）');
-  await sedcall('edit', path.join(gproj, '.taskflow', 'glossary.md'));
-  const i2 = await call('before_provider_request', { payload: BP('BASE') });
-  ok(!sysJoin(i2).includes('词表反馈沉淀'), 'TASKFLOW_GUARD I2 消账：write/edit 命中 .taskflow/glossary.md → 注入消失');
-  await icall([mkMsg('assistant', '用户说看不懂时我会改写词表')]);
-  const i3a = await call('before_provider_request', { payload: BP('BASE') });
-  await icall([mkMsg('user', '帮我看一下进度')]);
-  const i3b = await call('before_provider_request', { payload: BP('BASE') });
-  ok(!sysJoin(i3a).includes('词表反馈沉淀') && !sysJoin(i3b).includes('词表反馈沉淀'), 'TASKFLOW_GUARD I3 负路：assistant 信号词不计数 / user 无信号词不注入');
-  const i5 = await icall([mkMsg('user', '看不懂')], tmp);
-  ok(i5 === undefined, 'TASKFLOW_GUARD I5 零干扰：非 taskflow 项目不检测');
-  await icall([mkMsg('user', '没看懂这步')]);
-  const i4a = await call('session.compacting', {});
-  ok(Array.isArray(i4a?.context) && i4a.context.some((l) => String(l).includes('词表反馈沉淀')), 'TASKFLOW_GUARD I4 压缩兜底：pending>0 → 压缩摘要含沉淀行');
-  await sedcall('write', '.taskflow/glossary.md');
-  const i4b = await call('session.compacting', {});
-  ok(Array.isArray(i4b?.context) && !i4b.context.some((l) => String(l).includes('词表反馈沉淀')), 'TASKFLOW_GUARD I4 消账后：压缩行消失（任务接力行保留）');
-  const guardSrcI = fs.readFileSync(guardPath, 'utf8');
-  const tgDocI = fs.readFileSync(path.join(path.dirname(script), '..', 'packs', 'host-adapters', 'taskflow-guard.md'), 'utf8');
-  ok(guardSrcI.includes('词表反馈沉淀') && tgDocI.includes('词表反馈沉淀') && tfmjsSrc.includes('词表反馈沉淀'), 'TASKFLOW_GUARD I 渲染源锚×3：guard 头注释 / taskflow-guard.md / MECH_PROSE 均含 I 条目（v2.56.2 渲染源漂移防复发）');
-  // ---- v2.49.1 G 活体热修回归：多活并集归属 + 解析加固 ----
-  const glP = path.join(gproj, '.taskflow', 'g-live-20260101', 'task.json');
-  const glBak = fs.readFileSync(glP, 'utf8');
-  const glJ = JSON.parse(glBak); delete glJ.worktree; fs.writeFileSync(glP, JSON.stringify(glJ)); // 摘 worktree → 走主仓库归属分支
-  const gU = await gcall({ toolName: 'edit', input: { path: 'src/outside.ts' } });
-  ok(gU?.additionalContext && /g-live-20260101/.test(gU.additionalContext) && /g-ver-20260101/.test(gU.additionalContext) && /任何进行中任务/.test(gU.additionalContext) && /任务说明书/.test(gU.additionalContext), 'TASKFLOW_GUARD G 活体热修①：多活任务×主仓库编辑 → 并集比对，全不命中警告点名全部活任务（v2.56.2 措辞锚：任何进行中任务+任务说明书 spec 白话）');
-  fs.writeFileSync(glP, glBak);
-  const specP2 = path.join(gproj, '.taskflow', 'g-live-20260101', 'spec.md');
-  fs.appendFileSync(specP2, '\n- **改动文件集合声明**：`src/real-a.swift`、`src/real-b.swift`\n- **明确不做**：`src/never.swift`\n');
-  const gPA = await gcall({ toolName: 'edit', input: { path: 'src/real-a.swift' } });
-  const gPN = await gcall({ toolName: 'edit', input: { path: 'src/never.swift' } });
-  ok(gPA === undefined && gPN?.additionalContext && /编辑边界门/.test(gPN.additionalContext), 'TASKFLOW_GUARD G 活体热修②：冒号后反引号路径入清单（real-a 放行）；「明确不做」行路径不入（never 越界警告）；bold 标签垃圾不再当路径');
-  // （v2.76.0 S10-9：.pi/extensions/taskflow.ts 2.69.0 死副本已删除——5 handler vs 活体 12 handler、非 omp 发现根，
-  //   其 v2.63.0 适配器测试节随之移除；活体守卫测试住 2.72.0/2.76.0 guard 节）
-
-
-
   // ---- v2.58.0 MERGE_GATE：snapshot/mergegate 双门真跑（快照绿/红/刷新复绿 + 越界红/点名 + 兼容两路）----
   const mgRepo = path.join(tmp, 'mg-repo');
   fs.mkdirSync(path.join(mgRepo, '.taskflow'), { recursive: true });
@@ -2400,12 +2030,12 @@ try {
   const ovD = run(['overlap', 'mv-t1-20260101'], mgRepo);
   ok(ovD.status === 1 && /1-alpha × 5-eps/.test(ovD.stdout) && !/eps-fake/.test(ovD.stdout), '对抗加固 RC6（围栏）：涉及文件节内围栏示例不入集（eps-fake 不出现）+ 围栏后真实声明不丢（src/mv.ts 命中 1-alpha）');
 
-  // ---- v2.57.1 mech install prose 生成节幂等替换（I7 缺陷→测试门：先红——存量旧生成节 + 重装 → 必须自愈到当前口径）----
-  fs.writeFileSync(path.join(gproj, 'AGENTS.md'), [
-    '# AGENTS — 用户红线区', '',
+  // ---- v2.57.1 mech install prose 生成节幂等替换（I7 缺陷→测试门；v3.2 claude 线口径：CLAUDE.md 镜像 + 四门渲染）----
+  fs.writeFileSync(path.join(gproj, 'CLAUDE.md'), [
+    '# CLAUDE.md — 用户红线区', '',
     '用户内容：不许动我。', '',
     '## 宿主防护层（taskflow mech install 生成）', '',
-    '- .omp/hooks/pre/taskflow-guard.js 为 omp extension（文案 v2.56.1 人话化）：状态栏常显（进行中N/等你验收M/已上线超24小时未合并K）、commit --files 空格分隔硬拦、「阻塞」字样返回人话三问提醒（声明可能猜错、不拦操作）；卸载=删文件+清 project.json.mechanisms.TASKFLOW_GUARD（TASKFLOW_GUARD）', '',
+    '- .omp/hooks/pre/taskflow-guard.js 为 omp extension（文案 v2.56.1 人话化）：状态栏常显、commit --files 空格分隔硬拦、「阻塞」字样返回人话三问提醒（声明可能猜错、不拦操作）；卸载=删文件+清 project.json.mechanisms.TASKFLOW_GUARD（TASKFLOW_GUARD）', '',
     '## 用户后置节', '',
     '后置内容不许动。', '',
   ].join('\n'));
@@ -2416,14 +2046,15 @@ try {
     '## 机制：宿主防护层（mech install 生成 2026-10-09；TASKFLOW_GUARD，omp extension 住 .omp/hooks/pre/taskflow-guard.js）', '',
     '- **D 状态栏常显**：进行中N/等你验收M/已上线超24小时未合并K常驻 omp 底栏', '',
   ].join('\n'));
-  const rHeal = run(['mech', 'install', 'TASKFLOW_GUARD', '--yes'], gproj); // 登记 version='test'=漂移刷新 → v2.65.0 确认闸须 --yes（拒绝路归 v2.65.0 夹具块）
-  const agHealed = fs.readFileSync(path.join(gproj, 'AGENTS.md'), 'utf8');
-  ok(rHeal.status === 0 && agHealed.includes('词表反馈沉淀'), 'mech prose 自愈①（v2.57.1 红路）：存量旧口径 AGENTS 生成节 + 重装 → 整节刷新为当前渲染——旧版 marker 判重「跳过补记」永不自愈（v2.56.2 半治实证）');
-  ok(agHealed.includes('用户内容：不许动我。') && agHealed.includes('后置内容不许动。') && !agHealed.includes('不拦操作）；卸载'), 'mech prose 自愈②：节外用户内容原样保留（前置红线区 + 后置节不被吃；旧口径独有串「不拦操作）；卸载」消失——新渲染中间插有词表反馈沉淀条目）');
+  const tfHealRun = (args) => spawnSync('node', [script, ...args], { cwd: gproj, encoding: 'utf8', env: { ...process.env, TF_HOST: 'claude', TF_TASKFLOW_HOME: TF_HOME_TEST } }); // 块内局部 runner（外层 runEnv 声明在本块之后=TDZ，禁用）
+  const rHeal = tfHealRun(['mech', 'install', 'TASKFLOW_GUARD', '--yes']); // claude 宿主：四门薄适配 prose 渲染（omp 宿主降级不跑 prose）；登记 version 漂移 → --yes 过 v2.65.0 确认闸
+  const clHealed = fs.readFileSync(path.join(gproj, 'CLAUDE.md'), 'utf8');
+  ok(rHeal.status === 0 && clHealed.includes('宿主防护层') && clHealed.includes('压缩接力'), 'mech prose 自愈①（v2.57.1 红路，claude 线口径）：存量旧口径 CLAUDE.md 生成节 + 重装 → 整节刷新为 claude 四门当前渲染');
+  ok(clHealed.includes('用户内容：不许动我。') && clHealed.includes('后置内容不许动。') && !clHealed.includes('不拦操作）；卸载'), 'mech prose 自愈②：节外用户内容原样保留（前置红线区 + 后置节不被吃；旧口径独有串「不拦操作）；卸载」消失）');
   const convHealed = fs.readFileSync(path.join(gproj, '.taskflow', 'conventions.md'), 'utf8');
-  ok(convHealed.includes('词表反馈沉淀') && convHealed.includes('用户约定不许动。') && convHealed.includes('## 用户节'), 'mech prose 自愈③：conventions 生成节刷新为当前渲染 + 用户节保留');
-  const rHeal2 = run(['mech', 'install', 'TASKFLOW_GUARD'], gproj);
-  ok(rHeal2.status === 0 && fs.readFileSync(path.join(gproj, 'AGENTS.md'), 'utf8') === agHealed && fs.readFileSync(path.join(gproj, '.taskflow', 'conventions.md'), 'utf8') === convHealed, 'mech prose 幂等：同日重复 install 两文件 byte 稳定（幂等替换不重复追加）');
+  ok(convHealed.includes('状态翻转墙') && convHealed.includes('用户约定不许动。') && convHealed.includes('## 用户节'), 'mech prose 自愈③：conventions 生成节刷新为 claude 四门渲染 + 用户节保留');
+  const rHeal2 = tfHealRun(['mech', 'install', 'TASKFLOW_GUARD']);
+  ok(rHeal2.status === 0 && fs.readFileSync(path.join(gproj, 'CLAUDE.md'), 'utf8') === clHealed && fs.readFileSync(path.join(gproj, '.taskflow', 'conventions.md'), 'utf8') === convHealed, 'mech prose 幂等：同日重复 install 两文件 byte 稳定（幂等替换不重复追加）');
 
   // ---- v2.60.0：PARK 搁置状态（park/unpark）+ doctor I18 账实对账 ----
   const pkRepo = path.join(tmp, 'pk-repo');
@@ -2540,7 +2171,7 @@ try {
   // ---- v2.61.1 三线收口回归：mech 渲染登记表过滤（D1）+ changelog 门标题算数/触发词十三式 + plain-speech 80 字窗/编号列表 + guard 幽灵 worktree/花括号/BLOCKER_RE ----
   // ① D1 渲染过滤不变式：渲染清单=union(登记表「采纳产物」列)——产物列「—」的技能内门不落项目（旧版全家渲染把
   //    validate-plain-speech.mjs 渲染进项目=死产物：SKILL_ROOT 按脚本位置解析到项目根、读不存在的 references/glossary.md 恒红）
-  ok(fs.existsSync(path.join(repo2, 'scripts/harness/validate-changelog.sh')) && fs.existsSync(path.join(repo2, 'scripts/harness/deploy-preflight.mjs')) && fs.existsSync(path.join(repo2, 'scripts/harness/credential-probe.mjs')) && fs.existsSync(path.join(repo2, 'scripts/design/extract-spec.js')) && fs.existsSync(path.join(repo2, '.omp/hooks/pre/taskflow-guard.js')), 'mech 渲染过滤（D1）：登记表在册产物照常渲染（changelog/preflight/凭证探针/提取器/guard 五落点齐，v2.62.0 DEPLOY_GATE 双产物）');
+  ok(fs.existsSync(path.join(repo2, 'scripts/harness/validate-changelog.sh')) && fs.existsSync(path.join(repo2, 'scripts/harness/deploy-preflight.mjs')) && fs.existsSync(path.join(repo2, 'scripts/harness/credential-probe.mjs')) && fs.existsSync(path.join(repo2, 'scripts/design/extract-spec.js')), 'mech 渲染过滤（D1）：登记表在册产物照常渲染（changelog/preflight/凭证探针/提取器四落点齐，v2.62.0 DEPLOY_GATE 双产物；claude 线 guard 产物住 .claude/hooks，渲染走 claude 宿主）');
   ok(!fs.existsSync(path.join(repo2, 'scripts/harness/validate-plain-speech.mjs')), 'mech 渲染过滤（D1）：产物列「—」的技能内门（PLAIN_SPEECH_GATE）零渲染——旧版全家渲染把恒红死产物带进项目');
   ok(fs.existsSync(path.join(skillRoot, 'packs', 'briefing', 'assets', 'harness', 'validate-plain-speech.mjs')), 'mech 渲染过滤（D1）资产面：技能内门脚本住技能仓包内原位（SKILL_ROOT 语义成立），过滤只断渲染不删资产');
   const psInst = run(['mech', 'install', 'PLAIN_SPEECH_GATE'], gproj2);
@@ -2565,35 +2196,6 @@ try {
   fs.writeFileSync(psNum, '结论一句。\n\n1. 第一句说明背景。第二句补充细节。第三句给出数据。第四句总结。第五句超数。\n\n## 不看上下文也能懂的检验问题\n\n- 能对上吗？\n');
   const psNumR = spawnSync('node', [psScript, psNum], { encoding: 'utf8' });
   ok(psNumR.status === 1 && /句（>4）/.test(psNumR.stderr), 'PLAIN_SPEECH 编号项入检：编号项 5 句 → 红点名（v3 口径单段 ≤4 句，编号项同段纪律）');
-  // ④ guard 三修：F-01 幽灵 worktree（空/缺 worktree 不进 realPath——realPath('') 解析到项目根=幽灵罩住全仓错归属）/
-  //    F-02 花括号整行先展开再收集（bullet 正则逗号截断 docs/prd/{auth=真路径清单外误报）/ F-03 BLOCKER_RE 补 blocked·卡住
-  const gIdxP = path.join(gproj, '.taskflow', 'index.json');
-  const gIdx0 = JSON.parse(fs.readFileSync(gIdxP, 'utf8'));
-  fs.mkdirSync(path.join(gproj, '.taskflow', 'g-ghost-a-20260101'), { recursive: true });
-  fs.writeFileSync(path.join(gproj, '.taskflow', 'g-ghost-a-20260101', 'task.json'), J({ id: 'g-ghost-a-20260101', title: '无 worktree 幽灵', status: 'active', sessionID: 's', subtasks: [] })); // task.json 无 worktree 字段（guard-h-misfire 档案活体形态）
-  fs.mkdirSync(path.join(gproj, '.taskflow', 'g-ghost-b-20260101'), { recursive: true });
-  fs.writeFileSync(path.join(gproj, '.taskflow', 'g-ghost-b-20260101', 'task.json'), J({ id: 'g-ghost-b-20260101', title: '空串 worktree 幽灵', status: 'active', worktree: '', sessionID: 's', subtasks: [] }));
-  fs.writeFileSync(gIdxP, J({ tasks: [
-    { id: 'g-ghost-a-20260101', title: '无 worktree 幽灵', status: 'active', tier: 'small', branch: null, sessionID: 's' },
-    { id: 'g-ghost-b-20260101', title: '空串 worktree 幽灵', status: 'active', tier: 'small', branch: null, worktree: '', sessionID: 's' },
-    ...gIdx0.tasks,
-  ] })); // 幽灵排最前：旧版归属首中即断——错点名幽灵的形态才可观察
-  const gGhost = await gcall({ toolName: 'edit', input: { path: 'src/outside.ts' } });
-  ok(gGhost?.additionalContext && gGhost.additionalContext.includes('g-live-20260101') && !gGhost.additionalContext.includes('g-ghost'), 'TASKFLOW_GUARD F-01 幽灵 worktree：空/缺 worktree 任务跳过归属判定，越界警告仍点名真主（g-live）——旧版空串进 realPath 解析到项目根=幽灵罩住全仓');
-  fs.writeFileSync(gIdxP, JSON.stringify(gIdx0, null, 2) + '\n'); // 还原 index（后续语义不受幽灵残留影响）
-  const gSpecP = path.join(gproj, '.taskflow', 'g-live-20260101', 'spec.md');
-  const gSpec0 = fs.readFileSync(gSpecP, 'utf8');
-  fs.writeFileSync(gSpecP, gSpec0.replace('## 边界与影响面\n\n- `src/in-scope.ts`（主清单）', '## 边界与影响面\n\n- `src/in-scope.ts`（主清单）\n- docs/prd/{auth,share}/functional.md（两域清单）'));
-  const gBrace = await gcall({ toolName: 'edit', input: { path: 'docs/prd/auth/functional.md' } });
-  const gBraceOut = await gcall({ toolName: 'edit', input: { path: 'docs/prd/unknown/functional.md' } });
-  ok(gBrace === undefined && gBraceOut?.additionalContext && /编辑边界门/.test(gBraceOut.additionalContext), 'TASKFLOW_GUARD F-02 花括号收集：整行先展开再收集——{auth,share} 两展开在清单内放行、清单外仍警告（旧版 bullet 正则逗号截断成 docs/prd/{auth=清单内误报越界）');
-  fs.writeFileSync(gSpecP, gSpec0);
-  const hBlocked = await hcall([mkMsg('user', '继续'), mkMsg('assistant', '<task-result id="t9" agent="scout" status="completed">子任务卡住了：构建红</task-result>')]);
-  ok(Array.isArray(hBlocked?.messages) && hBlocked.messages.length === 3 && /同类排查/.test(String(hBlocked.messages[2].content)), 'TASKFLOW_GUARD F-03 H 特征词补全：信封报告含「卡住」→ 触发三问提醒（旧词表零检出）');
-  const hBlockedEn = await hcall([mkMsg('user', '继续'), mkMsg('assistant', '<task-result>{"note":"I am blocked by missing spec"}</task-result>')]);
-  ok(Array.isArray(hBlockedEn?.messages) && hBlockedEn.messages.length === 3, 'TASKFLOW_GUARD F-03 H 特征词补全：信封报告含「blocked」→ 触发（block(?:er|ing|ed) 变体族收全）');
-  const hLegend = await hcall([mkMsg('user', '⛔ 31 天需决策 🔴 2 项')]);
-  ok(hLegend === undefined, 'TASKFLOW_GUARD F-03 反例不松动：纯图例行（无特征词无信封）→ 静默（v2.61.0 来源限定语义保持）');
 
   // ---- v2.64.0 jarProbe 实物对账：preflight ⓪探针优先（path 死文件场景回归锁）+ deploy 入口透传 + doctor I17 配置入口（夹具真跑，硬规则 17）----
   // 场景源：历史部署实证——compose 形态下 jarPath 指向宿主机 systemd 遗留死文件，
@@ -2902,54 +2504,6 @@ try {
     const gRed = run(['gates', 'ev-a-20260101'], evRepo);
     ok(gRed.status === 1 && /越界门：红/.test(gRed.stdout) && /gates verdict：3 红 0 黄——先消化红灯/.test(gRed.stdout), `v2.69.0 gates 红路：分支越界提交 → 越界+预检+stale 三红 + verdict 先消化红灯${gRed.status !== 1 ? ' ← ' + gRed.stdout + gRed.stderr : ''}`);
 
-    // 状态翻转墙/验收期提醒/输出规范注入/技能加载埋点（gproj 守门夹具伪造事件——遍历全部 tool_call handler，与宿主派发同序）
-    const jcall = async (toolName, input, env = {}) => {
-      for (const k of Object.keys(env)) process.env[k] = env[k];
-      let out;
-      for (const fn of handlers['tool_call'] ?? []) out = (await fn({ toolName, input }, mkCtx())) ?? out;
-      for (const k of Object.keys(env)) delete process.env[k];
-      return out;
-    };
-    const jT = path.join(gproj, '.taskflow', 'g-ver-20260101', 'task.json');
-    const jOld = fs.readFileSync(jT, 'utf8');
-    const jFlip = await jcall('write', { path: jT, content: JSON.stringify({ ...JSON.parse(jOld), status: 'active' }) });
-    ok(jFlip?.block === true && /状态翻转墙/.test(jFlip.reason) && /TF_STATUS=off/.test(jFlip.reason), 'v2.69.0 状态翻转墙 enforce（缺省）：write 手改 status → block，reason 含豁免指引');
-    const jOff = await jcall('write', { path: jT, content: JSON.stringify({ ...JSON.parse(jOld), status: 'active' }) }, { TF_STATUS: 'off' });
-    ok(jOff === undefined, 'v2.69.0 状态翻转墙 off：TF_STATUS=off 单次豁免放行');
-    const jWarn = await jcall('write', { path: jT, content: JSON.stringify({ ...JSON.parse(jOld), status: 'active' }) }, { TF_STATUS: 'warn' });
-    ok(jWarn?.additionalContext && /状态翻转墙/.test(jWarn.additionalContext) && !jWarn.block, 'v2.69.0 状态翻转墙 warn：警告档放行附 additionalContext');
-    const jNote = await jcall('write', { path: jT, content: JSON.stringify({ ...JSON.parse(jOld), note: '备注变更' }) });
-    ok(jNote === undefined, 'v2.69.0 状态翻转墙误报面：纯 note 字段变更放行');
-    const jNew = await jcall('write', { path: path.join(gproj, '.taskflow', 'g-new-20260101', 'task.json'), content: JSON.stringify({ id: 'g-new-20260101', status: 'active' }) });
-    ok(jNew === undefined, 'v2.69.0 状态翻转墙建档路：新文件 status=active 放行');
-    const jNewV = await jcall('write', { path: path.join(gproj, '.taskflow', 'g-new2-20260101', 'task.json'), content: JSON.stringify({ id: 'g-new2-20260101', status: 'verifying' }) });
-    ok(jNewV?.block === true, 'v2.69.0 状态翻转墙建档路：新文件 status=verifying 拦（仅 active 可建档）');
-    const jBad = await jcall('write', { path: jT, content: '{oops' });
-    ok(jBad?.block === true && /坏档案/.test(jBad.reason), 'v2.69.0 状态翻转墙：坏 JSON 视同违规拦截');
-    const jEdit = await jcall('edit', { path: jT, old_string: '"status": "verifying"', new_string: '"status": "merged"' });
-    ok(jEdit?.block === true && /status verifying→merged/.test(jEdit.reason), 'v2.69.0 状态翻转墙 edit 通道：字面替换模拟检出翻转 → block');
-    const jEditNote = await jcall('edit', { path: jT, old_string: '"title": "验收中"', new_string: '"title": "验收中二"' });
-    ok(jEditNote === undefined, 'v2.69.0 状态翻转墙 edit 通道：非状态字段替换放行');
-    const jSed = await jcall('bash', { command: "sed -i 's/verifying/merged/' .taskflow/g-ver-20260101/task.json" });
-    ok(jSed?.block === true && /状态翻转墙/.test(jSed.reason), 'v2.69.0 状态翻转墙 bash 通道：sed -i 触及 task.json 且不含 tf.mjs → block');
-    const jSedOff = await jcall('bash', { command: "sed -i 's/verifying/merged/' .taskflow/g-ver-20260101/task.json" }, { TF_STATUS: 'off' });
-    ok(jSedOff === undefined, 'v2.69.0 状态翻转墙 bash 通道：TF_STATUS=off 放行');
-    const jTfmjs = await jcall('bash', { command: 'node tf.mjs park g-x --reason y' });
-    ok(jTfmjs === undefined, 'v2.69.0 状态翻转墙 bash 通道：tf.mjs 命令零干扰');
-    const k1 = await jcall('bash', { command: 'git push origin main' });
-    ok(k1?.additionalContext && /TASKFLOW_GUARD 验收期提醒/.test(k1.additionalContext) && /g-ver-20260101/.test(k1.additionalContext) && !k1.block, 'v2.69.0 K：verifying 在档时 git push → 提醒不拦（点名任务）');
-    const k2 = await jcall('bash', { command: 'git push origin main' }, { TF_VERIFY_WARN: 'off' });
-    ok(k2 === undefined, 'v2.69.0 K：TF_VERIFY_WARN=off 关闭提醒');
-    const eLive = await call('before_provider_request', { payload: BP('BASE') });
-    ok(sysJoin(eLive).includes('taskflow 实况：') && /等验收 g-ver-20260101（部署 \d{2}-\d{2} \d{2}:\d{2}）/.test(sysJoin(eLive)) && sysJoin(eLive).includes('活 g-live-20260101'), 'v2.69.0 E 实况行：活/等验收（部署短格式）注入 system 角色消息');
-    const tFile = path.join(tmp, 'skill-usage.jsonl');
-    fs.rmSync(tFile, { force: true });
-    await jcall('read', { path: 'skill://taskflow/SKILL.md' }, { TF_SKILL_USAGE: tFile });
-    await jcall('read', { path: 'skill://x/references/y.md' }, { TF_SKILL_USAGE: tFile });
-    await jcall('read', { path: '/etc/hosts' }, { TF_SKILL_USAGE: tFile });
-    const tRows = fs.existsSync(tFile) ? fs.readFileSync(tFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
-    ok(tRows.length === 2 && tRows[0].skill === 'taskflow' && tRows[1].skill === 'x' && tRows.every((r) => r.project === 'guard-proj'), 'v2.69.0 T 埋点：skill:// 读取计数（非 skill 路径不记，技能名截去子路径，项目名取 cwd basename）');
-
     // skills --usage 报表
     const usgFile = path.join(tmp, 'usage-fix.jsonl');
     fs.writeFileSync(usgFile, [
@@ -3192,48 +2746,6 @@ try {
     ok(/── src\/extra\.ts/.test(r2.stdout) && !/── src\/report\.ts/.test(r2.stdout), '2.72.0 impact 缺省文件集：active 任务 baseCommit..HEAD 改动（extra.ts 在列，基线已含的 report.ts 不在列）');
     const r3 = run(['impact', '--since', iBase], iRepo);
     ok(/── src\/extra\.ts/.test(r3.stdout), '2.72.0 impact --since：覆盖缺省区间（same 改动集）');
-    // guard 牵连排查/数据边界 提醒：mech 渲染 + mock pi 真执行；直接取末位 tool_call handler（本节新增，不挪既有下标）
-    const jproj = path.join(tmp, 'impact-guard-proj');
-    fs.mkdirSync(path.join(jproj, '.taskflow'), { recursive: true });
-    sh('git init -q -b main && git config user.email t@t && git config user.name t && echo \'.taskflow/\' >> .git/info/exclude', jproj);
-    fs.writeFileSync(path.join(jproj, '.taskflow', 'project.json'), J({ key: 'impactguard', git: true, mechanisms: {}, assetExts: 'ts|js', deploy: { webCommands: [] } }));
-    fs.writeFileSync(path.join(jproj, '.taskflow', 'index.json'), J({ tasks: [] }));
-    fs.mkdirSync(path.join(jproj, 'src', 'core'), { recursive: true });
-    fs.writeFileSync(path.join(jproj, 'src', 'core', 'rep.ts'), '// 环比口径统计\nexport const rep = (xs) => xs.map((v) => v * 2);\n');
-    for (const n of ['a1', 'a2', 'a3']) fs.writeFileSync(path.join(jproj, 'src', n + '.ts'), `import { rep } from './core/rep.ts';\nexport const ${n} = rep;\n`);
-    sh('git add -A && git commit -qm src', jproj);
-    const instJ = run(['mech', 'install', 'TASKFLOW_GUARD'], jproj);
-    ok(instJ.status === 0 && fs.existsSync(path.join(jproj, '.omp', 'hooks', 'pre', 'taskflow-guard.js')), '2.72.0 guard 牵连排查/数据边界 夹具：mech 渲染 guard（guardOn 采纳闸前提）');
-    const guardModJ = await import('file://' + path.join(jproj, '.omp', 'hooks', 'pre', 'taskflow-guard.js'));
-    const handlersJ = {};
-    guardModJ.default({ setLabel() {}, on: (ev, fn) => { (handlersJ[ev] ??= []).push(fn); } });
-    const mineJ = handlersJ['tool_call'][handlersJ['tool_call'].length - 1];
-    const jx = async (toolName, input, env = {}) => {
-      for (const k of Object.keys(env)) process.env[k] = env[k];
-      try { return await mineJ({ toolName, input }, { cwd: jproj, ui: {} }); }
-      finally { for (const k of Object.keys(env)) delete process.env[k]; } // env 卫生：档位变量用完即删，防串档
-    };
-    const bothJ = await jx('edit', { path: 'src/core/rep.ts', old_string: '环比', new_string: '同比' });
-    ok(typeof bothJ?.additionalContext === 'string' && /⚠ TASKFLOW_GUARD 牵连排查提醒/.test(bothJ.additionalContext) && /⚠ TASKFLOW_GUARD 数据边界提醒/.test(bothJ.additionalContext)
-      && bothJ.additionalContext.indexOf('牵连排查') < bothJ.additionalContext.indexOf('数据边界') && !bothJ.block,
-      '2.72.0 guard：牵连排查+数据边界 双命中合并为一条 additionalContext（换行分隔两行，不注入两条）');
-    ok(/字符串命中 3 个代码文件（grep 级，含注释\/文案，非引用语义）/.test(bothJ?.additionalContext ?? '') && /impact --files src\/core\/rep\.ts/.test(bothJ?.additionalContext ?? ''), '2.72.0 guard 牵连排查：提醒含代码文件命中数（阈=3 达标）与 impact 指引（2.76.0 grep 级对冲口径）');
-    const j19off = await jx('edit', { path: 'src/core/rep.ts', old_string: '环比', new_string: '同比' }, { TF_J19_WARN: 'off' });
-    ok(j19off?.additionalContext?.includes('数据边界') && !j19off.additionalContext.includes('牵连排查'), '2.72.0 guard 档位：TF_J19_WARN=off → 仅 数据边界 注入');
-    const j20off = await jx('edit', { path: 'src/core/rep.ts', old_string: '环比', new_string: '同比' }, { TF_J20_WARN: 'off' });
-    ok(j20off?.additionalContext?.includes('牵连排查') && !j20off.additionalContext.includes('数据边界'), '2.72.0 guard 档位：TF_J20_WARN=off → 仅 牵连排查 注入');
-    const bothOff = await jx('edit', { path: 'src/core/rep.ts', old_string: '环比', new_string: '同比' }, { TF_J19_WARN: 'off', TF_J20_WARN: 'off' });
-    ok(bothOff === undefined, '2.72.0 guard 档位：两档全 off → 零注入（纯提醒无 enforce）');
-    const lowJ = await jx('edit', { path: 'src/a1.ts', old_string: 'rep', new_string: 'rep2' });
-    ok(lowJ === undefined, '2.72.0 guard 牵连排查 阈下：零引用文件不注入（a1.ts 无引用且无 数据边界 特征）');
-    const hiTh = await jx('edit', { path: 'src/core/rep.ts', old_string: '环比', new_string: '同比' }, { TF_IMPACT_THRESHOLD: '99' });
-    ok(hiTh?.additionalContext?.includes('数据边界') && !hiTh.additionalContext.includes('牵连排查'), '2.72.0 guard 阈值：TF_IMPACT_THRESHOLD=99 → 牵连排查 不达不注入（数据边界 不受阈值影响）');
-    const newFileJ = await jx('write', { path: 'src/pipe.ts', content: '导出统计\nconst t = sum(1) + count(2);\n' });
-    ok(newFileJ?.additionalContext?.includes('数据边界') && !newFileJ.additionalContext.includes('牵连排查'), '2.72.0 guard 数据边界：未落盘 write 用 input.content 探测（新文件也有面；牵连排查 零引用不注入）');
-    const bkJ = await jx('edit', { path: '.taskflow/index.json', old_string: '[]', new_string: '[{"id":"x"}]' });
-    ok(bkJ === undefined, '2.72.0 guard 零干扰①：.taskflow/ 档案归既有 状态翻转墙/编辑边界门，本 handler 不注入');
-    const outJ = await jx('edit', { path: path.join(tmp, 'outside-impact.md'), old_string: 'a', new_string: 'b' });
-    ok(outJ === undefined, '2.72.0 guard 零干扰②：仓库外文件不注入');
   }
 
   // ---- 2.76.0 机械修复（A2 对抗审查 D3/E1/D1/S10-8/A1b/S10-9）：guard 牵连排查/数据边界 弹脸 + impact 检索修正 ----
@@ -3273,44 +2785,6 @@ try {
     ok(/③数据管道特征：数据边界风险/.test(secOf(rj20.stdout, 'src/repSql.xml')), '2.76.0 D3③：SQL 大写 SUM(/COUNT(+GROUP BY 计入（旧正则大小写敏感且无 SQL 形态全 miss）');
     ok(/③数据管道特征：数据边界风险/.test(secOf(rj20.stdout, 'src/bigShift.ts')), '2.76.0 D3④：首 500 行+尾 200 行窗口——文件尾部特征可见（旧固定 500 行窗口漏）');
     ok(/③数据管道特征：未命中/.test(secOf(rj20.stdout, 'src/onlyComment.ts')), '2.76.0 S10-8：注释行词特征不计（// 环比…注释不再是管道证据）');
-    // ③ guard：mech 渲染 + D3① edit 增量扫描 + 泛名降档 + 文档不计阈值 + 新提醒词
-    const gp = path.join(tmp, 'guard-e1-proj');
-    fs.mkdirSync(path.join(gp, '.taskflow'), { recursive: true });
-    sh('git init -q -b main && git config user.email t@t && git config user.name t && echo \'.taskflow/\' >> .git/info/exclude', gp);
-    fs.writeFileSync(path.join(gp, '.taskflow', 'project.json'), J({ key: 'guarde1', git: true, mechanisms: {}, assetExts: 'ts|js', deploy: { webCommands: [] } }));
-    fs.writeFileSync(path.join(gp, '.taskflow', 'index.json'), J({ tasks: [] }));
-    fs.mkdirSync(path.join(gp, 'src', 'core'), { recursive: true });
-    fs.writeFileSync(path.join(gp, 'src', 'core', 'rep.ts'), 'export const rep = (xs) => xs.map((v) => v * 2);\n');
-    for (const n of ['a1', 'a2', 'a3']) fs.writeFileSync(path.join(gp, 'src', n + '.ts'), `import { rep } from './core/rep.ts';\nexport const ${n} = rep;\n`);
-    fs.writeFileSync(path.join(gp, 'NOTES.md'), 'rep.ts 是核心工具\n'); // 文档提及：不计 牵连排查 阈值
-    fs.writeFileSync(path.join(gp, 'src', 'index.ts'), 'export const idx = 1;\n');
-    for (const n of ['f1', 'f2', 'f3']) fs.writeFileSync(path.join(gp, 'src', n + '.ts'), "import { idx } from './index.ts';\n"); // 3 个代码引用（泛名降档用）
-    fs.writeFileSync(path.join(gp, 'src', 'cold.ts'), 'export const cold = 1;\n');
-    sh('git add -A && git commit -qm g', gp);
-    const instG = run(['mech', 'install', 'TASKFLOW_GUARD'], gp);
-    ok(instG.status === 0 && fs.existsSync(path.join(gp, '.omp', 'hooks', 'pre', 'taskflow-guard.js')), '2.76.0 guard 夹具：mech 渲染（guardOn 采纳闸前提）');
-    const gMod = await import('file://' + path.join(gp, '.omp', 'hooks', 'pre', 'taskflow-guard.js'));
-    const gH = {};
-    gMod.default({ setLabel() {}, on: (ev, fn) => { (gH[ev] ??= []).push(fn); } });
-    const gJ = gH['tool_call'][gH['tool_call'].length - 1];
-    const gx = async (toolName, input, env = {}) => {
-      for (const k of Object.keys(env)) process.env[k] = env[k];
-      try { return await gJ({ toolName, input }, { cwd: gp, ui: {} }); }
-      finally { for (const k of Object.keys(env)) delete process.env[k]; } // env 卫生：用完即删防串档
-    };
-    const d3 = await gx('edit', { path: 'src/cold.ts', old_string: 'cold = 1', new_string: "const label = '环比统计';" });
-    ok(d3?.additionalContext?.includes('数据边界') && !d3.additionalContext.includes('牵连排查'), '2.76.0 D3①：edit 新增环比特征 → 数据边界 弹（旧读编辑前磁盘内容，最该弹的那次恰好不弹）');
-    const d3en = await gx('edit', { path: 'src/cold.ts', old_string: 'cold = 1', new_string: 'const t = row.previousPeriod;' });
-    ok(d3en?.additionalContext?.includes('数据边界'), '2.76.0 D3②：edit 注入英文管道词（previousPeriod）→ 数据边界 弹');
-    const d3c = await gx('edit', { path: 'src/cold.ts', old_string: 'cold = 1', new_string: '// 环比同比统计对比' });
-    ok(d3c === undefined, '2.76.0 S10-8：注释行词特征不弹 数据边界（纯注释编辑零噪音）');
-    const j19 = await gx('edit', { path: 'src/core/rep.ts', old_string: 'rep', new_string: 'rep2' });
-    ok(j19?.additionalContext?.includes('牵连排查') && /字符串命中 3 个代码文件（grep 级，含注释\/文案，非引用语义）/.test(j19.additionalContext), '2.76.0 D1：牵连排查 只计代码文件（a1/a2/a3=3；NOTES.md 提及不计）且文案带 grep 级对冲');
-    ok(!/13\+ 引用形态/.test(j19?.additionalContext ?? ''), '2.76.0 D4：牵连排查 提醒不再带会漂移的形态清单数字');
-    const gen = await gx('edit', { path: 'src/index.ts', old_string: 'idx', new_string: 'idx2' });
-    ok(gen === undefined, '2.76.0 S10-8：泛名（index）不弹 牵连排查（防噪音疲劳——真仓实测前端噪音率 44%）');
-    const j20w = await gx('edit', { path: 'src/cold.ts', old_string: 'cold = 1', new_string: "const label = '统计口径';" });
-    ok(j20w?.additionalContext?.includes('枚举真空与失真形态（空集/单条/首期无参照/异常值/口径变更/范围串扰）'), '2.76.0 A1b：数据边界 提醒词升级为真空与失真形态（含口径变更/范围串扰，与 data-boundary 清单同步）');
   }
 
   // ---- 2.77.1 检索精度残余（R2 有效性攻击）：F2a 孪生独立来源 + F2b 跨语言同名词膨胀 ----
@@ -3356,64 +2830,12 @@ try {
     ok(/代码引用文件数 9（阈值判定），文档提及 1/.test(scCfg), '2.77.1 F2b①边界：映射外扩展名（.cfg）检索不设限——代码 9（share.ts/a/b/J1-J6）文档 1（NOTES.md）');
     ok(/⚠ 跨语言歧义：命中跨语言形态，basename 泛用词风险高（异扩展名命中 9\/9/.test(scCfg), '2.77.1 F2b②：映射外组合异扩展名命中过半 → 强制跨语言歧义标注');
     ok(/文档与帮助文本（不计阈值）：/.test(scCfg) && /NOTES\.md:1/.test(scCfg), '2.77.1 F2b 保留：代码/文档分组逻辑保留——文档组不计阈值（映射外目标仍可见）');
-    // guard F2b：编辑 share.ts 不再被 Java 噪音顶过阈值；映射外扩展名异族过半强制注记
-    const g2 = path.join(tmp, 'guard-2771-proj');
-    fs.mkdirSync(path.join(g2, 'client'), { recursive: true });
-    fs.mkdirSync(path.join(g2, 'server'), { recursive: true });
-    fs.mkdirSync(path.join(g2, 'conf'), { recursive: true });
-    fs.mkdirSync(path.join(g2, '.taskflow'), { recursive: true });
-    sh('git init -q -b main && git config user.email t@t && git config user.name t && echo \'.taskflow/\' >> .git/info/exclude && echo \'.omp/\' >> .git/info/exclude', g2);
-    fs.writeFileSync(path.join(g2, '.taskflow', 'project.json'), J({ key: 'guard2771', git: true, mechanisms: {}, assetExts: 'ts|js', deploy: { webCommands: [] } }));
-    fs.writeFileSync(path.join(g2, '.taskflow', 'index.json'), J({ tasks: [] }));
-    fs.writeFileSync(path.join(g2, 'share.ts'), 'export const share = (x) => x;\n');
-    fs.writeFileSync(path.join(g2, 'client', 'a.ts'), "import { share } from '../share';\n");
-    fs.writeFileSync(path.join(g2, 'client', 'b.ts'), "import { share } from '../share';\n");
-    for (const n of ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']) fs.writeFileSync(path.join(g2, 'server', n + '.java'), `// share 分享文案\npublic class ${n} { String label = "分享 share"; }\n`);
-    fs.writeFileSync(path.join(g2, 'conf', 'share.cfg'), 'threshold=3\n');
-    sh('git add -A && git commit -qm g2771', g2);
-    const inst2 = run(['mech', 'install', 'TASKFLOW_GUARD'], g2);
-    ok(inst2.status === 0 && fs.existsSync(path.join(g2, '.omp', 'hooks', 'pre', 'taskflow-guard.js')), '2.77.1 guard 夹具：mech 渲染（guardOn 采纳闸前提）');
-    const gMod2 = await import('file://' + path.join(g2, '.omp', 'hooks', 'pre', 'taskflow-guard.js'));
-    const gH2 = {};
-    gMod2.default({ setLabel() {}, on: (ev, fn) => { (gH2[ev] ??= []).push(fn); } });
-    const gJ2 = gH2['tool_call'][gH2['tool_call'].length - 1];
-    const gx2 = async (toolName, input) => gJ2({ toolName, input }, { cwd: g2, ui: {} });
-    const f2bG = await gx2('edit', { path: 'share.ts', old_string: 'share', new_string: 'share2' });
-    ok(f2bG === undefined, '2.77.1 guard F2b①：编辑 share.ts 只计同扩展名族（2<阈值 3）不弹 牵连排查（旧被 Java 噪音顶到 8 误弹）');
-    const f2bX = await gx2('edit', { path: 'conf/share.cfg', old_string: 'threshold', new_string: 'threshold2' });
-    ok(f2bX?.additionalContext?.includes('牵连排查') && f2bX.additionalContext.includes('命中跨语言形态，basename 泛用词风险高'), '2.77.1 guard F2b②：映射外扩展名异族命中过半 → 牵连排查 提醒附跨语言歧义注记');
 
-    // ---- v2.83.0：guard 触发日志 + 多假设排序弹脸 + 链路文案 + 使用者视角落点（T1/T2/T3/T10）----
-    fs.writeFileSync(path.join(g2, '.taskflow', 'index.json'), J({ tasks: [{ id: 't-log-20260101', title: 'log', status: 'active', branch: 'task/t-log', worktree: path.join(g2, 'wt') }, { id: 't-acc-20260101', title: 'acc', status: 'verifying', branch: 'task/t-acc', worktree: null }] }));
-    fs.mkdirSync(path.join(g2, '.taskflow', 't-log-20260101'), { recursive: true });
-    fs.writeFileSync(path.join(g2, '.taskflow', 't-log-20260101', 'spec.md'), '## 目标\nlog 夹具\n## 边界与影响面\n- `in-scope.ts`\n');
-    fs.mkdirSync(path.join(g2, 'wt'), { recursive: true });
-    fs.writeFileSync(path.join(g2, 'wt', 'in-scope.ts'), 'x\n');
-    const logPath = path.join(g2, '.taskflow', '.guard-log.jsonl');
-    const gxAll = async (toolName, input) => { const outs = []; for (const h of gH2['tool_call'] ?? []) { try { const r = await h({ toolName, input }, { cwd: g2, ui: {} }); if (r?.additionalContext) outs.push(r.additionalContext); } catch { /* 单 handler 失败不连坐 */ } } return outs.join('\n'); };
-    const logBefore = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
-    const gBound = await gxAll('edit', { path: 'outside.ts', old_string: 'a', new_string: 'b' });
-    ok(gBound.includes('编辑边界门'), '2.83.0 T1 前置：清单外主仓编辑 → 编辑边界门警告');
-    const logAfter = fs.readFileSync(logPath, 'utf8');
-    ok(logAfter.includes('"gate":"boundary"') && logAfter.length > logBefore.length, '2.83.0 T1 触发日志：编辑边界门触发 → .guard-log.jsonl 落 gate=boundary 行');
-    process.env.TF_GUARD_LOG = 'off';
-    await gxAll('edit', { path: 'outside2.ts', old_string: 'a', new_string: 'b' });
-    ok(fs.readFileSync(logPath, 'utf8') === logAfter, '2.83.0 T1 触发日志：TF_GUARD_LOG=off → 零新增行');
-    delete process.env.TF_GUARD_LOG;
-    const ctxFns = gH2['context'] ?? [];
-    const fireCtx = async (messages) => { let out = null; for (const h of ctxFns) { try { const r = await h({ messages }, { cwd: g2, ui: {} }); if (r?.messages) out = r; } catch { /* 单 handler 失败不连坐 */ } } return out; };
-    const bugMsgs = [{ role: 'user', content: '这个页面打不开了' }];
-    const t2a = await fireCtx(bugMsgs);
-    ok(Array.isArray(t2a?.messages) && t2a.messages.length === 2 && t2a.messages[1].content.includes('多假设排序'), '2.83.0 T2 弹脸：报障话语 → 注入多假设排序提醒');
-    ok(fs.readFileSync(logPath, 'utf8').includes('"gate":"triage"'), '2.83.0 T2 日志：弹脸触发 → gate=triage 落盘');
-    ok((await fireCtx(bugMsgs)) === null, '2.83.0 T2 去重：同报障话语二次不重复注入');
-    ok((await fireCtx([{ role: 'user', content: '帮我加个按钮' }])) === null, '2.83.0 T2 负路：非报障话语零注入');
-    fs.writeFileSync(path.join(g2, 'pipe.ts'), 'const x = [1].sort((a,b)=>a-b);\nconst n = [1].filter(v=>v);\n// 环比统计\n');
-    sh('git add -A && git commit -qm pipe', g2);
-    const imp3 = await gx2('edit', { path: 'conf/share.cfg', old_string: 'threshold', new_string: 'threshold9' });
-    ok(imp3?.additionalContext?.includes('skill://impact-analysis/SKILL.md'), '2.83.0 T3 链路：牵连排查提醒含可执行加载指令');
-    const db3 = await gx2('edit', { path: 'pipe.ts', old_string: '环比统计', new_string: '环比统计2' });
-    ok(db3?.additionalContext?.includes('skill://data-boundary/SKILL.md'), '2.83.0 T3 链路：数据边界提醒含可执行加载指令');
+    // T10 验收简报夹具（最小项目——guard 模块已随 omp 线迁原仓，此处只需普通 taskflow 项目跑 accept）
+    const g2 = path.join(tmp, 'accept-2830-proj');
+    fs.mkdirSync(path.join(g2, '.taskflow'), { recursive: true });
+    sh('git init -q -b main && git config user.email t@t && git config user.name t', g2);
+    fs.writeFileSync(path.join(g2, '.taskflow', 'index.json'), J({ tasks: [{ id: 't-acc-20260101', title: 'acc', status: 'verifying', tier: 'small', branch: null, worktree: null }] }));
     fs.mkdirSync(path.join(g2, '.taskflow', 't-acc-20260101'), { recursive: true });
     fs.writeFileSync(path.join(g2, '.taskflow', 't-acc-20260101', 'spec.md'), '## 目标\nacc 夹具\n## 验收标准\n- [ ] 页面能打开\n');
     fs.writeFileSync(path.join(g2, '.taskflow', 't-acc-20260101', 'task.json'), J({ id: 't-acc-20260101', title: 'acc', goal: 'acc 夹具', status: 'verifying', anchor: 'managed' }));
@@ -3425,24 +2847,17 @@ try {
   {
     const repoRoot = path.resolve(import.meta.dirname, '..');
     const mech = run(['mechanisms'], tmp);
-    const guardMod = await import('file://' + path.join(repoRoot, 'packs', 'host-adapters', 'assets', 'guard', 'taskflow-guard.js'));
-    const manifest = guardMod.GATE_MANIFEST;
+    const guardMod = await import('file://' + path.join(repoRoot, 'packs', 'host-adapters', 'assets', 'guard', 'taskflow-guard-claude.mjs'));
+    const manifest = guardMod.GATE_MANIFEST_CLAUDE;
     const mechRows = mech.stdout.split('\n').filter((l) => l.includes('｜开关：'));
-    ok(mech.status === 0 && Array.isArray(manifest) && manifest.length === 18, `2.85.0 T8 mechanisms：GATE_MANIFEST 注册表 18 项（实际 ${Array.isArray(manifest) ? manifest.length : '非数组'}）`);
-    ok(mechRows.length === manifest.length, `2.85.0 T8 mechanisms：输出行数与 GATE_MANIFEST 一致（${mechRows.length}/${manifest.length}）`);
-    ok(['状态翻转墙', '编辑边界门', '渲染证据墙', '牵连排查', '多假设排序弹脸', '状态引导注入', 'TF_STATUS', 'TF_BOUND', 'TF_V_WARN', 'TF_J01_WARN', 'TF_GUARD_LOG', 'TF_STATE_INJECT'].every((k) => mech.stdout.includes(k)), '2.85.0 T8 mechanisms：中文名与 TF_ 开关齐全');
+    ok(mech.status === 0 && Array.isArray(manifest) && manifest.length === 4, `v3.2 T8 mechanisms：GATE_MANIFEST_CLAUDE 注册表 4 门（实际 ${Array.isArray(manifest) ? manifest.length : '非数组'}）`);
+    ok(mechRows.length === manifest.length, `v3.2 T8 mechanisms：输出行数与 GATE_MANIFEST_CLAUDE 一致（${mechRows.length}/${manifest.length}）`);
+    ok(['状态翻转墙', '编辑边界门', '簿记硬拦', '压缩接力', 'TF_STATUS', 'TF_BOUND', 'TF_BASH', 'TF_GUARD_LOG'].every((k) => mech.stdout.includes(k)), 'v3.2 T8 mechanisms：claude 四门中文名与 TF_ 开关齐全');
     const gateOfRow = (l) => { const m = l.match(/gate=([^）]*)）/); return m ? m[1] : null; };
     const gateDiff = manifest.map((m, i) => [m, gateOfRow(mechRows[i])]).filter(([m, g]) => g !== (m.gate ?? null));
     ok(gateDiff.length === 0, `2.85.0 T8 mechanisms：逐门 gate= 与 GATE_MANIFEST 一致${gateDiff.length ? `（首异：${gateDiff[0][0].name} 输出=${gateDiff[0][1]} 期望=${gateDiff[0][0].gate}）` : ''}`);
-    // 注册表对账：feature 字母集合 = taskflow-guard.md 功能清单表字母集合（RENDER 除外——拍板 docs 不另开行，与机制 token RENDER_EVIDENCE_GATE 同源）；17 门 name 无重复
-    const gmTable = (fs.readFileSync(path.join(repoRoot, 'packs', 'host-adapters', 'taskflow-guard.md'), 'utf8').split('## 功能清单')[1] ?? '').split('\n## ')[0];
-    const docLetters = new Set([...gmTable.matchAll(/^\|\s*([A-Z]+)\s*\|/gm)].map((m) => m[1]));
-    const mfLetters = new Set(manifest.map((m) => m.feature).filter((f) => f && f !== 'RENDER'));
-    const letterDiff = [...mfLetters].filter((x) => !docLetters.has(x)).concat([...docLetters].filter((x) => !mfLetters.has(x)));
-    ok(letterDiff.length === 0 && mfLetters.size === 16, `2.85.0 注册表对账：feature 字母集合（除 RENDER）= taskflow-guard.md 功能清单字母集合${letterDiff.length ? `（差集：${letterDiff.join('、')}）` : ''}（${mfLetters.size} 字母）`);
-    ok(manifest.filter((m) => m.feature === 'RENDER').length === 1 && manifest.some((m) => m.feature === null), '2.85.0 注册表对账：RENDER 恰 1 条（渲染证据墙）、null feature 恰法（docs 无独立行门）');
     const mNames = manifest.map((m) => m.name);
-    ok(new Set(mNames).size === mNames.length, '2.85.0 注册表对账：18 门 name 无重复');
+    ok(new Set(mNames).size === mNames.length, 'v3.2 注册表对账：4 门 name 无重复');
     // help：注册表驱动后仍输出全部 29 命令前缀行 + 退出码行
     const hlp = run([], tmp);
     const helpCmds = ['init', 'new', 'checkpoint', 'rollback', 'confirm', 'packs', 'self-update', 'ls', 'doctor', 'reconcile', 'scout', 'skills', 'accept', 'takeover', 'park', 'unpark', 'commit', 'req-confirm', 'testplan', 'diagnose', 'nextid', 'lock', 'snapshot', 'mergegate', 'gates', 'revert-plan', 'stale', 'overlap', 'impact', 'deploy', 'migrate', 'archive', 'svc', 'hygiene', 'lint', 'mech', 'mechanisms', 'canary', 'release'];
@@ -3458,11 +2873,6 @@ try {
     ok(fs.readFileSync(path.join(repoRoot, 'packs', 'briefing', 'plain-speech.md'), 'utf8').includes('业内做法对照'), '2.83.0 T9 槽位：plain-speech.md §4 含业内做法对照');
     ok(fs.readFileSync(path.join(repoRoot, 'references', 'entry-routes.md'), 'utf8').includes('理解重述'), '2.83.0 T11 锚点（v3 改址）：entry-routes.md 判定行含理解重述（核心 SKILL 收敛后判定载体=注册表）');
   }
-  {
-    sh('git checkout -qb task/t-rve2', rveRepo);
-    const v10 = await vgFire('edit', { path: 'a.vue', old_string: '.a{color:red}', new_string: '.a{color:crimson}' });
-    ok(v10.includes('渲染证据墙') && v10.includes('使用者视角'), '2.83.0 T10 宿主提醒：渲染证据墙提醒含使用者视角扩句');
-  }
 
   // ---- v2.86.0：单源共享内核（kernel.mjs 收编 guard/tf.mjs 逐字副本）——TRANSITIONS 对账 + 单源唯一 + 内联自包含 ----
   {
@@ -3471,14 +2881,10 @@ try {
     const sm = await import('file://' + path.join(repoRoot, 'scripts', 'taskflow-state-machine.mjs'));
     const illegal = sm.TRANSITIONS.filter((r) => r.to !== 'archive/').filter((r) => !kernel.STATE_LEGAL.some(([f, t]) => f === r.from && t === r.to));
     ok(illegal.length === 0 && sm.STATES === kernel.STATES, `2.86.0 内核对账：TRANSITIONS（除 archive/ 物理归层）∈ kernel.STATE_LEGAL 且 STATES 同源${illegal.length ? `（首违：${illegal[0].from}→${illegal[0].to}）` : ''}`);
-    const guardSrc2 = fs.readFileSync(path.join(repoRoot, 'packs', 'host-adapters', 'assets', 'guard', 'taskflow-guard.js'), 'utf8');
+    const guardSrc2 = fs.readFileSync(path.join(repoRoot, 'packs', 'host-adapters', 'assets', 'guard', 'taskflow-guard-claude.mjs'), 'utf8');
     const tfSrc2 = fs.readFileSync(path.join(repoRoot, 'scripts', 'tf.mjs'), 'utf8');
     const dupDef = ['J20_WORD_RE', 'J20_CODE_RE', 'EXT_FAMILY', 'j20Scan', 'j20CodeLines'].filter((k) => new RegExp(`(const|function) ${k}\\b`).test(guardSrc2) || new RegExp(`(const|function) ${k}\\b`).test(tfSrc2));
     ok(dupDef.length === 0, `2.86.0 单源唯一：kernel 外零本地定义${dupDef.length ? `（残留：${dupDef.join('、')}）` : ''}`);
-    // 内联自包含：真渲染产物（2.76.0 夹具 gp 已装 TASKFLOW_GUARD，本轮新 tf.mjs 渲染）含展开体、零 kernel import 行
-    const rendered = fs.readFileSync(path.join(tmp, 'guard-e1-proj', '.omp', 'hooks', 'pre', 'taskflow-guard.js'), 'utf8');
-    ok(/function j20Scan\(/.test(rendered) && /const EXT_FAMILY = \{/.test(rendered) && !/from\s*['"][^'"]*shared\/(kernel|host-adapter)\.mjs['"]/.test(rendered), '2.86.0 内联自包含：渲染副本含 j20Scan/EXT_FAMILY 展开体、零 kernel/adapter import 行');
-    ok(run(['mech', 'install', 'TASKFLOW_GUARD', '--yes'], path.join(tmp, 'guard-e1-proj')).stdout.includes('已安装'), '2.86.0 内联幂等：重装输出已安装（再渲染与既有副本逐字节一致=内联确定性）');
   }
 
   // ---- v2.87.0：宿主适配层（host-adapter 运行时合同单点）直测 + canary 金丝雀矩阵 ----
@@ -3497,18 +2903,18 @@ try {
     ok(adapter.sessIdOf(null) === null && adapter.sessIdOf(42) === null && adapter.sessIdOf('') === null, '2.87.0 adapter sessIdOf：非串/空 → null（降级无标注）');
     ok(adapter.inSessionMark('1730000000_abcd-uuid', 'abcd-uuid') === '，本会话' && adapter.inSessionMark('abcd-uuid', 'abcd-uuid') === '，本会话', '2.87.0 adapter inSessionMark：整名相等与下划线后缀（uuid 段）皆亮');
     ok(adapter.inSessionMark('1730000000_other-uuid', 'abcd-uuid') === '' && adapter.inSessionMark(null, 'x') === '' && adapter.inSessionMark('x', null) === '', '2.87.0 adapter inSessionMark：不匹配/缺参 → 空串（人读标签不亮=设计口径）');
-    // 渲染副本双内联：guard 产物含 adapter 展开体（injectPrepend）与 kernel 展开体
-    const rendered87 = fs.readFileSync(path.join(tmp, 'guard-e1-proj', '.omp', 'hooks', 'pre', 'taskflow-guard.js'), 'utf8');
-    ok(/function injectPrepend\(/.test(rendered87) && !/from\s*['"][^'"]*shared\/host-adapter\.mjs['"]/.test(rendered87), '2.87.0 渲染副本：adapter 内联展开（含 injectPrepend 体、零 import 行）');
     // v3.0.0 宿主适配面（F14/F36）：detectHost/usagePath/planScanDirs/guardTargets/redlineFile 分支矩阵（canary 矩阵随六路径 release 一并退役——金丝雀只剩真 omp 手跑）
     const noDir = { TF_HOST: 'none' };
     ok(adapter.detectHost(noDir) === 'none' && adapter.detectHost({ TF_HOST: 'omp' }) === 'omp', 'v3 adapter detectHost：TF_HOST 强制分支（none/omp）');
     ok(adapter.detectHost({}, () => true) !== 'none' && ['omp', 'opencode', 'claude'].includes(adapter.detectHost({ OMP: '1' }, () => false)), 'v3 adapter detectHost：env 痕迹优先于目录探测（OMP env→omp）');
     ok(adapter.detectHost({}, (p) => p.endsWith('.config/opencode')) === 'opencode' && adapter.detectHost({}, (p) => p.endsWith('.claude')) === 'claude' && adapter.detectHost({}, () => false) === 'none', 'v3 adapter detectHost：目录痕迹探测链 opencode→claude→none');
-    ok(adapter.usagePath('omp') !== null && adapter.usagePath('none') === null && adapter.usagePath('opencode') === null, 'v3 adapter usagePath：omp 独有埋点文件，其余 null=不写');
-    ok(adapter.planScanDirs('omp').length === 1 && adapter.planScanDirs('none').length === 0 && adapter.planScanDirs('claude').length === 0, 'v3 adapter planScanDirs：omp 扫 ~/.opencode/plan，其余 []');
-    ok(adapter.guardTargets('omp').length === 1 && adapter.guardTargets('none').length === 0, 'v3 adapter guardTargets：omp 有守门落点，none 空=降级纯纪律档');
+    ok(adapter.detectHost({ CLAUDECODE: '1' }, () => true) === 'claude' && adapter.detectHost({ TF_HOST: 'omp', CLAUDECODE: '1' }, () => true) === 'omp', 'v3.2 adapter detectHost：CLAUDECODE env→claude（优先于目录探测，双装机修正）；TF_HOST 强制仍最优先');
+    ok(adapter.usagePath('omp') === null && adapter.usagePath('claude') === null && adapter.usagePath('none') === null, 'v3.2 adapter usagePath：omp 线迁原仓——本仓全宿主 null=不写埋点（报表口径如实声明）');
+    ok(adapter.planScanDirs('omp').length === 0 && adapter.planScanDirs('none').length === 0, 'v3.2 adapter planScanDirs：omp 线迁原仓 → []，none []');
+    ok(adapter.planScanDirs('claude').length === 1 && adapter.planScanDirs('claude')[0].endsWith('.claude/plans'), 'v3.2 adapter planScanDirs：claude 扫 ~/.claude/plans（plan mode 产物落位）');
+    ok(adapter.guardTargets('omp').length === 0 && adapter.guardTargets('none').length === 0, 'v3.2 adapter guardTargets：omp 线迁原仓 → []（降级纯纪律档），none 空');
     ok(adapter.redlineFile('opencode') === 'AGENTS.md' && adapter.redlineFile('claude') === 'CLAUDE.md' && adapter.redlineFile('none') === null, 'v3 adapter redlineFile：宿主红线载体路由');
+    ok(adapter.canaryCmdBin('omp') === null && adapter.canaryCmdBin('claude') === 'claude', 'v3.2 adapter canaryCmdBin：omp 线迁原仓 → null（静默跳过），claude 接线');
   }
   // ---- v2.88.0：项目部署形态元数据（建档初始化提问检查单 deployment 三键）锚点 ----
   {
@@ -3738,7 +3144,78 @@ try {
     const ompRun = (args) => runEnv(args, ompGuardProj, { TF_HOST: 'omp', TF_TASKFLOW_HOME: path.join(tmp, 'v3-tfhome3') });
     ompRun(['init', '--host', 'omp']);
     const og = ompRun(['mech', 'install', 'TASKFLOW_GUARD', '--yes']);
-    ok(og.status === 0 && fs.existsSync(path.join(ompGuardProj, '.omp', 'hooks', 'pre', 'taskflow-guard.js')), 'v3 adapter host=omp：TASKFLOW_GUARD 照常渲染 .omp/hooks/pre');
+    ok(og.status === 0 && og.stdout.includes('降级纯纪律档') && !fs.existsSync(path.join(ompGuardProj, '.omp')), 'v3.2 adapter host=omp：omp 线已迁原仓——TASKFLOW_GUARD 降级纯纪律档（零 .omp 落盘）');
+  }
+  // v3.2.0 adapter host=claude 分支：plan 扫描 ~/.claude/plans / 红线镜像走 CLAUDE.md（功能路径真跑）
+  {
+    const fakeHome = path.join(tmp, 'claude-home');
+    const cproj = path.join(tmp, 'host-claude-proj');
+    fs.mkdirSync(cproj, { recursive: true });
+    fs.mkdirSync(path.join(fakeHome, '.claude', 'plans'), { recursive: true });
+    sh('git init -q -b main && git config user.email t@t && git config user.name t && echo x > r.md && git add -A && git commit -qm init', cproj);
+    fs.writeFileSync(path.join(fakeHome, '.claude', 'plans', 'fresh-plan.md'), '# host-claude-proj 接入计划\n\n- 目标项目：host-claude-proj\n');
+    fs.writeFileSync(path.join(fakeHome, '.claude', 'plans', 'other-plan.md'), '# 别的项目的计划\n\n- 与本项目无关\n');
+    fs.mkdirSync(path.join(cproj, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(cproj, 'docs', 'CHANGELOG.md'), '# CHANGELOG\n\n## 2026-01-01 — 初始\n\n- 做了什么：init\n');
+    const crun = (args) => runEnv(args, cproj, { TF_HOST: 'claude', TF_TASKFLOW_HOME: path.join(tmp, 'v3-tfhome-claude'), HOME: fakeHome });
+    crun(['init', '--host', 'claude']);
+    const cls = crun(['ls']);
+    ok(cls.status === 0 && cls.stdout.includes('计划交接文档') && cls.stdout.includes('.claude/plans/fresh-plan.md') && !cls.stdout.includes('other-plan.md'), 'v3.2 adapter host=claude：ls 扫 ~/.claude/plans（头 40 行含项目名才命中，无关计划不收）');
+    const cmech = crun(['mech', 'install', 'DATA_MODEL_GATE', '--yes']);
+    ok(cmech.status === 0 && fs.existsSync(path.join(cproj, 'CLAUDE.md')) && !fs.existsSync(path.join(cproj, 'AGENTS.md')), 'v3.2 adapter host=claude：mech install 红线镜像走 CLAUDE.md（redlineFile 路由，不写 AGENTS.md）');
+  }
+  // v3.2.0 claude 守门四门：渲染落位 + hooks 幂等注册（既有条目零损）+ 四门行为真跑（合成 stdin）+ guard-log 留痕
+  {
+    const gproj = path.join(tmp, 'host-claude-guard-proj');
+    fs.mkdirSync(path.join(gproj, '.claude'), { recursive: true });
+    sh('git init -q -b main && git config user.email t@t && git config user.name t && echo x > r.md && git add -A && git commit -qm init', gproj);
+    fs.writeFileSync(path.join(gproj, '.claude', 'settings.json'), JSON.stringify({ hooks: { Notification: [{ hooks: [{ type: 'command', command: 'echo user-hook' }] }] } }));
+    fs.mkdirSync(path.join(gproj, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(gproj, 'docs', 'CHANGELOG.md'), '# CHANGELOG\n\n## 2026-01-01 — 初始\n\n- 做了什么：init\n');
+    const grun = (args) => runEnv(args, gproj, { TF_HOST: 'claude', TF_TASKFLOW_HOME: path.join(tmp, 'v3-tfhome-guard') });
+    grun(['init', '--host', 'claude']);
+    const ginst = grun(['mech', 'install', 'TASKFLOW_GUARD', '--yes']);
+    const hookP = path.join(gproj, '.claude', 'hooks', 'taskflow-guard-claude.mjs');
+    ok(ginst.status === 0 && fs.existsSync(hookP), 'v3.2 claude guard：mech install 渲染 .claude/hooks/taskflow-guard-claude.mjs');
+    const rendered = fs.readFileSync(hookP, 'utf8');
+    ok(!/from\s*['"][^'"]*assets\/shared\/kernel\.mjs['"]/.test(rendered) && /judgeStatusFlip/.test(rendered), 'v3.2 claude guard：渲染副本内联自包含（零 shared import 行，判定核心在）');
+    ok(fs.readFileSync(path.join(gproj, 'CLAUDE.md'), 'utf8').includes('宿主防护层') && !fs.existsSync(path.join(gproj, 'AGENTS.md')), 'v3.2 claude guard：红线镜像走 CLAUDE.md（AGENTS.md 不写）');
+    const st = JSON.parse(fs.readFileSync(path.join(gproj, '.claude', 'settings.json'), 'utf8'));
+    ok(st.hooks.Notification && st.hooks.PreToolUse.length === 2 && st.hooks.PreCompact.length === 1, 'v3.2 claude guard：settings.json 幂等注册（既有 Notification 零损 + PreToolUse×2 + PreCompact×1）');
+    const tid = 'guard-demo-' + new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    fs.mkdirSync(path.join(gproj, '.taskflow', tid), { recursive: true });
+    fs.writeFileSync(path.join(gproj, '.taskflow', tid, 'task.json'), JSON.stringify({ id: tid, title: 'guard demo', status: 'verifying', anchor: 'managed' }));
+    fs.writeFileSync(path.join(gproj, '.taskflow', 'index.json'), JSON.stringify({ tasks: [{ id: tid, status: 'verifying' }] }));
+    const hook = (payload, env = {}) => spawnSync('node', [hookP], { input: JSON.stringify({ cwd: gproj, ...payload }), encoding: 'utf8', env: { ...process.env, TF_HOST: 'claude', ...env } });
+    const denyJ = hook({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(gproj, '.taskflow', tid, 'task.json'), content: JSON.stringify({ id: tid, status: 'merged' }) } });
+    ok(denyJ.status === 0 && denyJ.stdout.includes('"permissionDecision":"deny"') && denyJ.stdout.includes('状态翻转墙'), 'v3.2 claude guard J：手改 verifying→merged deny（理由带状态机口径）');
+    const passJ = hook({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(gproj, 'src', 'x.ts'), content: 'x' } });
+    ok(passJ.status === 0 && !passJ.stdout.trim(), 'v3.2 claude guard：无辜编辑零输出放行（fail-open 边界）');
+    const denyB = hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git reset --hard HEAD~1' } });
+    ok(denyB.status === 0 && denyB.stdout.includes('簿记硬拦') && denyB.stdout.includes('reset --hard'), 'v3.2 claude guard B：红线 git（reset --hard）deny');
+    const offB = hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git reset --hard HEAD~1' } }, { TF_BASH: 'off' });
+    ok(offB.status === 0 && !offB.stdout.trim(), 'v3.2 claude guard B：TF_BASH=off 单次豁免零输出');
+    const denyF = hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node tf.mjs commit t --files a.md b.md' } });
+    ok(denyF.status === 0 && denyF.stdout.includes('逗号分隔'), 'v3.2 claude guard B：commit --files 空格分隔硬拦（omp 同源判定）');
+    hook({ hook_event_name: 'PreCompact' });
+    const relayP = path.join(gproj, '.taskflow', tid, 'compact-relay.md');
+    ok(fs.existsSync(relayP) && fs.readFileSync(relayP, 'utf8').includes(tid) && fs.readFileSync(relayP, 'utf8').includes('PreCompact 自动落盘'), 'v3.2 claude guard C：PreCompact 落 compact-relay.md（任务快照）');
+    // G 边界门（缺省 ask / enforce / 清单内放行）——spec 声明清单 + 活动索引
+    fs.writeFileSync(path.join(gproj, '.taskflow', tid, 'spec.md'), '# guard demo\n\n## 边界与影响面\n\n- 上游：无\n- `src/`\n- 下游：无\n\n## 目标\n\nx\n');
+    fs.writeFileSync(path.join(gproj, '.taskflow', 'index.json'), JSON.stringify({ tasks: [{ id: tid, status: 'active' }] }));
+    const askG = hook({ hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: path.join(gproj, 'docs', 'other.md'), old_string: 'a', new_string: 'b' } });
+    ok(askG.status === 0 && askG.stdout.includes('"permissionDecision":"ask"') && askG.stdout.includes('编辑边界门'), 'v3.2 claude guard G：越界编辑缺省 ask（弹用户拍板）');
+    const denyG = hook({ hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: path.join(gproj, 'docs', 'other.md'), old_string: 'a', new_string: 'b' } }, { TF_BOUND: 'enforce' });
+    ok(denyG.status === 0 && denyG.stdout.includes('"permissionDecision":"deny"'), 'v3.2 claude guard G：TF_BOUND=enforce 越界 deny');
+    const hitG = hook({ hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: path.join(gproj, 'src', 'a.ts'), old_string: 'a', new_string: 'b' } });
+    ok(hitG.status === 0 && !hitG.stdout.trim(), 'v3.2 claude guard G：声明清单内编辑零输出放行');
+    const logTxt = fs.readFileSync(path.join(gproj, '.taskflow', '.guard-log.jsonl'), 'utf8');
+    ok(logTxt.includes('status-wall') && logTxt.includes('bookkeeping') && logTxt.includes('boundary') && logTxt.includes('compact-relay'), 'v3.2 claude guard：guard-log 四门 token 落痕');
+    grun(['mech', 'install', 'TASKFLOW_GUARD', '--yes']);
+    const st2 = JSON.parse(fs.readFileSync(path.join(gproj, '.claude', 'settings.json'), 'utf8'));
+    ok(st2.hooks.PreToolUse.length === 2 && st2.hooks.PreCompact.length === 1 && st2.hooks.Notification, 'v3.2 claude guard：重跑幂等（settings 条目不翻倍，既有 hooks 零损）');
+    const adapterG = await import('file://' + path.join(path.resolve(import.meta.dirname, '..'), 'assets', 'shared', 'host-adapter.mjs'));
+    ok(adapterG.guardTargets('claude').length === 1 && adapterG.canaryCmdBin('claude') === 'claude', 'v3.2 adapter：guardTargets/canaryCmdBin claude 分支接线');
   }
   // I19/I20/I21 + 复发台账 + 门咬合台账
   {

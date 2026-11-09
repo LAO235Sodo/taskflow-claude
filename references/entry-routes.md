@@ -19,7 +19,7 @@
 | R05 | 先放放/这个暂停/搁置一下/先别动（可逆暂停归搁置，明确不干才归作废 R18） | park：tf.mjs park <task-id> --reason（搁置留因，恢复跑 unpark；多任务时同全局点名判定） | references/entry-routes.md::搁置留因 | 簿记留因 | 否 | |
 | R06 | 把上次合并撤了/回退到合并前 | revert-plan 生成回退方案稿（只读，执行逐条确认；禁 reset --hard/force push）；撤销诉求先判状态——未合并→checkpoint 对比/手工反向+呈报，已合并才走本行 | references/entry-routes.md::revert-plan | 呈报确认闸 | 否 | |
 | R07 | 打不开/坏了/报错了/卡死/变慢/超时/数据没了（运行时故障报障） | 先挂诊断纪律再动手：diagnose 起手，多假设排序呈报后逐个验证；数据丢失先盘可恢复源（reflog/stash/checkpoint）再归因；环境/依赖/端口信号先对环境与端口节+svc ls；多任务时同全局点名判定 | references/entry-routes.md::运行时故障报障 | 多假设排序 | 否 | |
-| R08 | @taskflow 无语义/继续/接着弄/上次那个 | resume 优先：ls 表格原样呈现，第一问「继续哪个？」 | references/resume.md::继续哪个 | 默认动作 | 否 | |
+| R08 | 点名 taskflow 无语义/继续/接着弄/上次那个（宿主入口各异：Claude Code 用 /taskflow 或消息点名，omp 用 @taskflow 前缀） | resume 优先：ls 表格原样呈现，第一问「继续哪个？」 | references/resume.md::继续哪个 | 默认动作 | 否 | |
 | R09 | 继续 XX 的迭代/指名历史任务或领域词 | 归档续迭代：scout 双层检索→呈报候选方向 | references/resume.md::归档续迭代 | 检索呈报 | 否 | |
 | R10 | 为什么这么写/XX 在哪/怎么工作/能不能复用 | 问答管线：理解回显→定向探索→带证作答→追问衔接；复用诉求带目标（把 A 的方案用到 B）→按新需求走并核对派生来源 | references/qa.md::理解回显 | 带证作答 | 否 | |
 | R11 | 做完了/验收一下/合进去/收尾 | merge（合并门禁链：快照/越界/已并入预检，用户明确确认） | references/merge.md::用户明确确认 | 强制门禁 | 否 | |
@@ -97,6 +97,6 @@
 | 三层路径盘点 | briefing | 不可行宣称/绕过诉求 | packs/briefing/PACK.md | 呈报纪律 |
 | 合规哲学 | briefing | 合规标注/路径否决 | packs/briefing/PACK.md | 呈报纪律 |
 | CARRIER_SKILLS | carrier | 范围评估/影响面/数据边界/冲突分级/页面取证 | packs/carrier/PACK.md | `packs install carrier --all`；`skills <领域词|别名>` 检测 |
-| TASKFLOW_GUARD | host-adapters | 守门/guard/宿主扩展 | packs/host-adapters/PACK.md | `mech install TASKFLOW_GUARD`（仅 omp 宿主） |
+| TASKFLOW_GUARD | host-adapters | 守门/guard/宿主扩展 | packs/host-adapters/PACK.md | `mech install TASKFLOW_GUARD`（claude 宿主；其余降级纯纪律档） |
 
 > 包清单与启用态：`node <skill目录>/scripts/tf.mjs packs list`；profile 拍板：`tf.mjs init --packs <a,b>`；机制机器注册表：references/schemas/mechanisms.json（`node scripts/gen-mechanisms.mjs` 再生成，doctor I20 对账）。

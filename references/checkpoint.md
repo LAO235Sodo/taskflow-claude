@@ -27,7 +27,7 @@
    - `handoff.md`：已完成项打勾、刷新"下一步"（**必须具体到文件和命令**）、新决策进"已定决策"表、被放弃的方案进"被否决的方案"表（**必须写否决原因**）。
    - `findings.md`：新结论、新踩坑。
    - `progress.md`：顶部追加本次日志（时间、会话、做了什么、验收结果、遗留）。
-   - `conventions.md`（项目级）：核对推送/部署节奏是否按约定执行；用户口述新约定立即写入对应小节，**并同步更新项目根 AGENTS.md 的红线摘要**。
+   - `conventions.md`（项目级）：核对推送/部署节奏是否按约定执行；用户口述新约定立即写入对应小节，**并同步更新项目根宿主红线载体的红线摘要**（载体随宿主路由：opencode=AGENTS.md、claude=CLAUDE.md，其余仅 conventions.md——data.md 口径）。
    - **决策晋升（当场完成，不等 merge）**：本任务新固化的项目级决策，每条当场写一份 `.taskflow/decisions/YYYY-MM-DD-<slug>.md`（背景 / 决策 / 被否决方案及原因 / 影响范围），并在 `decisions.md` 对应条目加文件名回链——两处记录永远可互达。部署/验收类约定只住 conventions.md，不进决策库。
 1. 定位项目；确定当前任务（sessionID 只是"最近活跃会话"的定位提示，优先按它匹配；不匹配则列 active 任务让用户确认，**不得凭 sessionID 独断**）。
 2. **git 存档**（git=false 时跳过——该标志由 project.json 的 git 字段定义，见 data.md）：

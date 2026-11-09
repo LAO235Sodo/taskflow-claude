@@ -7,7 +7,7 @@
         "前端UI"
       ],
       "desc": "UI/UX 设计情报：样式/配色/字体/UX 准则/图标/图表",
-      "install": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill（真身在 .claude/skills/ui-ux-pro-max——clone 到扫描目录外后软链该子目录到 ~/.config/opencode/skills/ui-ux-pro-max）"
+      "install": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill（clone 到扫描目录外后软链该子目录到宿主技能扫描位——omp=~/.omp/agent/skills、opencode=~/.config/opencode/skills、claude=~/.claude/skills）"
     },
     {
       "id": "ui-flow-tester",
@@ -24,7 +24,7 @@
         "测试"
       ],
       "desc": "测试驱动开发（RED-GREEN-REFACTOR）",
-      "install": "git clone --depth 1 https://github.com/mattpocock/skills && cp -r skills/engineering/tdd <技能目录>/tdd（2026-10-11 用户提供源装毕：~/.config/opencode/skills/tdd）"
+      "install": "git clone --depth 1 https://github.com/mattpocock/skills && cp -r skills/engineering/tdd <技能目录>/tdd（2026-10-11 用户提供源装毕，落在本机 opencode 技能扫描位）"
     },
     {
       "id": "code-review",

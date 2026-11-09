@@ -1,10 +1,10 @@
 <div align="center">
 
-# taskflow
+# taskflow-claude
 
-**Cross-session checkpoint / resume / merge management for long-running coding-agent tasks**
+**Cross-session checkpoint / resume / merge management for long-running coding-agent tasks — the Claude Code line**
 
-Works with **any agent that can read files and run shell commands** — OpenCode · Claude Code · Codex · Cursor · Hermes
+Built for Claude Code (guard hooks + plan scan); the core works with **any agent that can read files and run shell commands**. Forked from [LAO235Sodo/taskflow](https://github.com/LAO235Sodo/taskflow) — the omp line lives there.
 
 Intent is auto-detected. There are no action words to memorize.
 
@@ -50,36 +50,30 @@ The same `.taskflow/` dossier is readable and writable by sessions from any fram
 
 ## Installation
 
-### OpenCode
-
-```bash
-git clone https://github.com/LAO235Sodo/taskflow.git
-ln -s "$(pwd)/taskflow" ~/.config/opencode/skills/taskflow
-```
+> This is the **Claude Code line** (forked from [LAO235Sodo/taskflow](https://github.com/LAO235Sodo/taskflow) v3.1.0 — the omp line with the full 18-gate guard lives in the original repo).
 
 ### Claude Code
 
 ```bash
-git clone https://github.com/LAO235Sodo/taskflow.git
-ln -s "$(pwd)/taskflow" ~/.claude/skills/taskflow
+git clone https://github.com/LAO235Sodo/taskflow-claude.git ~/.agents/skills/taskflow-claude
+ln -sfn ~/.agents/skills/taskflow-claude ~/.claude/skills/taskflow
+node ~/.claude/skills/taskflow/scripts/tf.mjs init   # per-project setup
 ```
 
-### Codex / Cursor (npx skills)
+Claude Code sessions are detected automatically (via the `CLAUDECODE` env var — no TF_HOST needed, even on dual-install machines); force with `TF_HOST=claude|opencode|none` if needed.
+
+### Guard (TASKFLOW_GUARD, four gates)
 
 ```bash
-npx skills add LAO235Sodo/taskflow -g
+node <skill-dir>/scripts/tf.mjs mech install TASKFLOW_GUARD   # renders .claude/hooks/taskflow-guard-claude.mjs + idempotent settings.json hooks merge
+TF_HOST=claude node <skill-dir>/scripts/tf.mjs canary         # two-layer delivery proof: synthetic stdin deny + real claude -p blocked by the wall
 ```
 
-### Hermes Agent
-
-```bash
-git clone https://github.com/LAO235Sodo/taskflow.git
-ln -s "$(pwd)/taskflow" ~/.hermes/skills/taskflow
-```
+J status-flip wall (PreToolUse, deny by default) · G edit-boundary gate (default **asks you**) · B bookkeeping hard-block (space-separated `--files` + red-line git) · C compaction relay (writes compact-relay.md before auto-compact).
 
 ### Any other agent (minimal intake)
 
-No skill-directory mechanism? Just tell your agent where SKILL.md lives. The single CLI has zero dependencies: `node scripts/tf.mjs` with your local node.
+No skill-directory mechanism? Just tell your agent where SKILL.md lives. The single CLI has zero dependencies: `node scripts/tf.mjs` with your local node. Under any non-claude host the guard degrades to the pure-discipline tier (conventions red lines + doctor).
 
 ## The problems it solves
 
