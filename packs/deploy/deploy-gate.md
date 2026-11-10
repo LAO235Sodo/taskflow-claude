@@ -14,8 +14,24 @@
 
 deploy 入口门禁（预检）绿后追加输出一行「验证分级」：读 `project.json.deployment` 三键，经 schema 真身（references/schemas/project.schema.json——枚举/分级注解唯一出处）映射本项目适用的验证档次（①文档配置直接合 ②共享测试套 ③临时实例+干净数据副本 ④任务级完全隔离缓做）+ verify 原文——**纯信息不拦**，为部署/验证清单的口径提供档案依据；deployment 未登记=ℹ「下次建档补问」（未答不落盘语义）。档次的机械兜底分别在：合并侧=merge.md 第 5 步 lock 授锁「验证分级」行，落档侧=doctor schema 校验（出枚举/占位/未注册节=红）。
 
-## 部署分支语义（v2.66.0，merge-first——2026-10-16 误部署实证固化）
+## 部署影响清单（多服务必附，v3.7.0——2026-11-10 用户拍板，合并「环境×程度」反馈）
 
+**触发**：本次部署涉及 ≥2 个可独立上线的服务/组件（backend jar / frontend dist / DB 迁移 / 脚本 / 中间件配置——任二即触发）；单服务部署不强制但鼓励复用同款形态。**落点**：部署呈报（briefing-部署清单.md——五类正式呈报那道）必含本清单节，置于命令序列**之前**——用户拍板的对象先是影响面，再是命令。
+
+**头部一行「环境与程度」**（合并 2026-11-10 「merge 后到什么程度」反馈）：本次部署目标环境（哪套/哪台）+ 三态程度声明——merge 后 = 本地主干收编线上未动；部署后 = 新版本在线但存量态未补；验收后 = 落地闭环。禁「merge 完就等部署」式的程度含混。
+
+**固定形态（七列，缺列 = 呈报不合格）**：
+
+| # | 服务/组件 | 本次变更（一句） | 上线顺序与依赖（为何是这个序） | 影响面（谁/什么行为受影响） | 回滚点（具体到文件/命令） | 验证方法（线上探测） |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | <backend jar> | <…> | <…> | <…> | <…> | <…> |
+
+**三条纪律**：
+①**顺序列必须写依赖理由**（例：「DB 迁移随 jar 启动自动应用 → jar 先于前端；前端新列依赖后端契约已上线」）——只写序号不写理由 = 不合格；
+②**回滚点必须具体**（jar.bak-*/dist.bak-*/补数脚本——「可以回滚」这类空话不算）；不可逆变更（DB 迁移类）必须显式标「不可逆」并给补偿动作（如存量补数脚本）；
+③**影响面列点名受影响方**（全部登录用户/仅 Web 用户/存量数据行/第三方调用方），写「无影响」必须给一句理由——禁空泛。
+
+## 部署分支语义（v2.66.0，merge-first——2026-10-16 误部署实证固化）
 - **判定**：project.json deploy.commands 含 main 检出断言（`branch --show-current … 'main'`）= 该项目部署命令**锁死从 main 构建**（镜像化/paas-ready 形态的并集语义）。deploy 入口（tf.mjs）对此机械防呆：`--branch` 传非 main 分支 → **拒绝**（构建会静默空转：checkout/tag/构建全取 main，产出与线上同内容的镜像，实物不变——2026-10-16 首次误部署实证：任务分支直接 deploy 构建了 main 同内容镜像，容器实物 md5 与部署前完全一致，靠 jarProbe 实物对账才抓出）。
 - **正确流程（merge-first）**：任务实现全绿 → merge 前审查 → `merge --no-ff` 入 main → `tf.mjs deploy --branch main --version <V>` → 部署验证清单（实物 md5 对账+指纹翻新+迁移日志哨兵+行为探针+冒烟+**多环境附属核对**：存在测试/预发等附属套时其容器版本必须同步到同版本——旧版本经共享资源写正式数据=污染源，2026-10-26 沉淀）→ 真机验收 → `accept --pass` → 归档。verifying = 已部署已合并等真机验收（I16 敞口「已部署未合并」形态在此流程下天然消失）。
 - **实物对账不可省**：任何部署后第一验证 = jarProbe/实物 md5 与本地构建比对（tag 正确 ≠ 内容正确——tag 来自主仓库 HEAD 时尤其如此）；md5 不变 = 空转部署，查构建检出区。
@@ -71,7 +87,7 @@ deploy 入口门禁（预检）绿后追加输出一行「验证分级」：读 
 - `node tf.mjs mech install DEPLOY_GATE`：渲染 `scripts/harness/deploy-preflight.mjs`、`scripts/harness/credential-probe.mjs` 入项目 + conventions 补记（部署协调四件套节）+ AGENTS 红线镜像 + 采纳登记（doctor 采纳对账产物存在性）。**已装项目升级到 2.40.0+ 行为须重跑一次 `mech install DEPLOY_GATE --yes` 刷新项目侧脚本快照**（渲染是快照不是引用；已装版本漂移刷新属确认闸场景，未带 `--yes` 拒绝落盘并打印将覆盖文件清单，v2.65.0）。**渲染是快照不是引用——项目侧定制 deploy-preflight/credential-probe 必须上游化或迁项目自有文件，整文件覆盖已有文件须过 `--yes` 确认闸（清单先行，不再静默）**（v2.62.0 教训：进程清点段本地定制未上游化，mech 刷新即静默删段；v2.65.0 机械闸收口）。
 - **延迟加载**：项目未装时门降级通过，首个部署触点（merge.md 第 6 步）识别并呈报一次安装建议——禁静默降级、禁未问先装（硬规则 22 同款纪律）。
 - **首次采集基线**：人工核实线上实况（systemctl cat 拿 EnvironmentFile → jar md5 → 签名册），以 `--record`（含 `--jar-path`）补录；基线缺位时预检红属预期，不许为绿灯编造基线。
-- **部署清单呈报走 PLAIN_SPEECH_GATE（硬规则 24）**：部署命令清单是五类正式呈报之一——落 `.taskflow/<id>/briefing-部署清单.md` 过 `validate-plain-speech.mjs` 后再呈报用户；清单里 DEPLOY_GATE/让位/敞口等词必须带大白话括号（词表住项目 `.taskflow/glossary.md`，模板 templates/glossary.md），用户要能一眼看懂每条命令会做什么、哪步可回滚。
+- **部署清单呈报走 PLAIN_SPEECH_GATE（硬规则 24）**：部署命令清单是五类正式呈报之一——落 `.taskflow/<id>/briefing-部署清单.md` 过 `validate-plain-speech.mjs` 后再呈报用户；清单里 DEPLOY_GATE/让位/敞口等词必须带大白话括号（词表住项目 `.taskflow/glossary.md`，模板 templates/glossary.md），用户要能一眼看懂每条命令会做什么、哪步可回滚。**多服务部署（≥2 组件）呈报必附「部署影响清单」（v3.7.0——七列固定形态 + 头部「环境与程度」行，细则见上文专节）**。
 - **宿主侧加固（TASKFLOW_GUARD，v2.45.0）**：部署墙是本门在宿主层的延伸——omp extension（`.omp/hooks/pre/taskflow-guard.js`）拦 bash 工具里的 rsync/scp 部署特征与 ssh+systemctl restart，提示必经 deploy 入口；默认警告模式，项目观察稳定后 `TF_WALL=enforce` 切硬拦。检测归脚本、强制归宿主——绕过入口在物理层失效（细则 packs/host-adapters/taskflow-guard.md）。
 
 ## fixture
