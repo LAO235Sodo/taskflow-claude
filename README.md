@@ -44,9 +44,9 @@ node ~/.claude/skills/taskflow/scripts/tf.mjs init
 
 adapter 单点=`assets/shared/host-adapter.mjs`。
 
-## 守门（TASKFLOW_GUARD 四门薄适配）
+## 守门（TASKFLOW_GUARD 五门薄适配：四硬门 + 领域提示门）
 
-`node <skill目录>/scripts/tf.mjs mech install TASKFLOW_GUARD` —— 渲染 `.claude/hooks/taskflow-guard-claude.mjs`（自包含单文件）并幂等合并项目 `.claude/settings.json` hooks（既有条目零触碰）：
+`node <skill目录>/scripts/tf.mjs mech install TASKFLOW_GUARD` —— 渲染 `.claude/hooks/taskflow-guard-claude.mjs` 与 `.claude/hooks/taskflow-hint-claude.mjs`（自包含单文件）并幂等合并项目 `.claude/settings.json` hooks（既有条目零触碰）：
 
 | 门 | 事件 | 档位 |
 | --- | --- | --- |
@@ -54,8 +54,9 @@ adapter 单点=`assets/shared/host-adapter.mjs`。
 | G 编辑边界门 | PreToolUse（Edit/Write/MultiEdit） | `TF_BOUND` 缺省 ask 弹用户拍板 / enforce / off——越界编辑对照 spec 声明清单 |
 | B 簿记硬拦 | PreToolUse（Bash） | `TF_BASH` 缺省 deny / off——`commit --files` 空格分隔 + 红线 git（reset --hard / force push 等） |
 | C 压缩接力 | PreCompact | 压缩前自动落 `.taskflow/<id>/compact-relay.md` 接力快照 |
+| H 领域提示门（永不拦截） | PostToolUse（Write/Edit/MultiEdit）+ UserPromptSubmit（缺省关） | `TF_HINT` 缺省开 / off——写文件命中领域硬信号 → 注入领域映射技能清单 + 机械在场检测（domain.md 映射的 L1 落地；去重每会话每领域一次；`TF_HINT_PROMPT=on` 开需求词粗筛） |
 
-金丝雀（装完必跑一次）：`TF_HOST=claude node <skill目录>/scripts/tf.mjs canary`——机械层（合成 stdin 必 deny）+ 真实 `claude -p` 模型层（必被墙拦）双层实证。触发日志 `.taskflow/.guard-log.jsonl`（`TF_GUARD_LOG=off` 关）。
+金丝雀（装完必跑一次）：`TF_HOST=claude node <skill目录>/scripts/tf.mjs canary`——机械层（合成 stdin：守门必 deny、提示门必注入含领域词且同会话去重）+ 真实 `claude -p` 模型层（覆写状态必被墙拦 + 写 .java 必触发提示门，guard-log 双留痕）实证。触发日志 `.taskflow/.guard-log.jsonl`（`TF_GUARD_LOG=off` 关）。
 
 ## 能力包（懒加载）
 

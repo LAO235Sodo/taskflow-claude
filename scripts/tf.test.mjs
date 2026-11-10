@@ -1212,6 +1212,54 @@ try {
   ok(mechRef.status === 0 && pj2r.mechanisms['决策组合门'].version !== '0.0.1' && /版本漂移/.test(mechRef.stdout), 'mech install 版本漂移刷新（--yes）：内容一致仅版本落后 → 不早退，登记刷回当前技能版本');
   const docFresh = run(['doctor'], repo2);
   ok(!/快照版本不符/.test(docFresh.stdout) && /采纳对齐：决策组合门/.test(docFresh.stdout), '刷新后 doctor 采纳对账转绿（版本一致）');
+
+  // 提示门（TASKFLOW_GUARD 第五门族，v3.4.0）：claude 宿主渲染 + settings 双注册 + 注入/去重/开关/非 git 隔离
+  {
+    const repoH = path.join(tmp, 'repoH');
+    fs.mkdirSync(repoH, { recursive: true });
+    sh('git init -q -b main && git config user.email t@t.local && git config user.name t && echo ".taskflow/" >> .git/info/exclude', repoH);
+    sh('echo x > f.txt && git add -A && git commit -qm init', repoH);
+    const tdH = path.join(repoH, '.taskflow');
+    fs.mkdirSync(tdH, { recursive: true });
+    fs.writeFileSync(path.join(tdH, 'project.json'), J({ key: 'sandbox/repoH', name: 'repoH', repoRoot: repoH, remote: null, git: true, createdAt: now, lastActiveAt: now }));
+    fs.writeFileSync(path.join(tdH, 'index.json'), J({ tasks: [] }));
+    const hintHookP = path.join(repoH, '.claude', 'hooks', 'taskflow-hint-claude.mjs');
+    // 块内局部 runner（对齐 2049 先例：try 体 2712 行有同名 runEnv 声明=TDZ 遮蔽，顶层 runEnv 禁用）
+    const runClaude = (args) => spawnSync('node', [script, ...args], { cwd: repoH, encoding: 'utf8', env: { ...process.env, TF_HOST: 'claude', TF_TASKFLOW_HOME: TF_HOME_TEST } });
+    const instH = runClaude(['mech', 'install', 'TASKFLOW_GUARD', '--yes']);
+    ok(instH.status === 0 && fs.existsSync(hintHookP), '提示门：mech install 渲染 hint 副本落位');
+    const hintSrc = fs.readFileSync(hintHookP, 'utf8');
+    ok(!hintSrc.includes('__DOMAIN_SKILLS__') && !hintSrc.includes('__SKILL_CLI__') && hintSrc.includes('java-springboot'), '提示门：渲染占位已内联（技能映射含 java-springboot、零残留占位符）');
+    const setH = JSON.parse(fs.readFileSync(path.join(repoH, '.claude', 'settings.json'), 'utf8'));
+    const ptu = setH.hooks.PostToolUse ?? [];
+    const ups = setH.hooks.UserPromptSubmit ?? [];
+    ok(ptu.some((g) => g.matcher === 'Write|Edit|MultiEdit' && (g.hooks ?? []).some((h) => h.command.includes('taskflow-hint-claude.mjs') && h.timeout === 15)), '提示门：settings PostToolUse 注册（timeout 15）');
+    ok(ups.length === 1 && ups[0].hooks?.[0]?.command.includes('taskflow-hint-claude.mjs'), '提示门：settings UserPromptSubmit 注册（hook 内 TF_HINT_PROMPT 门控缺省关）');
+    ok((setH.hooks.PreToolUse ?? []).some((g) => g.matcher === 'Edit|Write|MultiEdit' && (g.hooks ?? []).some((h) => h.command.includes('taskflow-guard-claude.mjs'))), '提示门：同批安装 guard 四门注册不回退');
+    const hintRun = (evt, env) => { const r = spawnSync('node', [hintHookP], { input: JSON.stringify(evt), encoding: 'utf8', cwd: repoH, env: { ...process.env, ...env } }); return { out: r.stdout ?? '', err: r.stderr ?? '', status: r.status }; };
+    const evtJava = { hook_event_name: 'PostToolUse', session_id: 'ses_hint_t', cwd: repoH, tool_name: 'Write', tool_input: { file_path: path.join(repoH, 'Foo.java'), content: 'class Foo{}' } };
+    const h1 = hintRun(evtJava);
+    ok(h1.status === 0 && h1.out.includes('additionalContext') && h1.out.includes('Java') && h1.out.includes('java-springboot') && !h1.err.includes('fatal'), '提示门：.java 写入注入领域提示（在场检测活、stderr 零漏出）');
+    ok(!hintRun(evtJava).out.includes('additionalContext'), '提示门：同会话同领域去重（第二次静默）');
+    const h3 = hintRun({ ...evtJava, session_id: 'ses_hint_off' }, { TF_HINT: 'off' });
+    ok(!h3.out.includes('additionalContext'), '提示门：TF_HINT=off 零注入');
+    const h4 = hintRun({ hook_event_name: 'PostToolUse', session_id: 'ses_hint_t2', cwd: repoH, tool_name: 'Edit', tool_input: { file_path: path.join(repoH, 'foo.test.ts'), content: '' } });
+    ok(h4.out.includes('「测试」') && !h4.out.includes('「Node」'), '提示门：测试文件名优先于扩展名领域（foo.test.ts → 测试 非 Node）');
+    ok(!hintRun({ hook_event_name: 'PostToolUse', session_id: 'ses_hint_t3', cwd: repoH, tool_name: 'Write', tool_input: { file_path: 'https://example.com/a.java', content: '' } }).out.includes('additionalContext'), '提示门：协议地址零注入（与 guard 同款过滤）');
+    const hMiss = hintRun({ ...evtJava, session_id: 'ses_hint_miss' }, { TF_SKILL_DIRS: path.join(tmp, 'no-skills-dir') });
+    ok(hMiss.out.includes('缺失') && hMiss.out.includes('DEP_ASK_GATE'), '提示门：在场检测缺失形态（缺失清单 + DEP_ASK_GATE 口径）');
+    const h7 = hintRun({ hook_event_name: 'UserPromptSubmit', session_id: 'ses_hint_p1', cwd: repoH, prompt: '帮我改页面样式' });
+    ok(h7.out.trim() === '' && h7.status === 0, '提示门：UserPromptSubmit 缺省关（无 TF_HINT_PROMPT 零注入）');
+    // 非 git 目录：状态落临时目录、stderr 干净（v3.4.0 stderr 直通修复锁定）
+    const ngDir = path.join(tmp, 'ngHint');
+    fs.mkdirSync(ngDir, { recursive: true });
+    const h5 = spawnSync('node', [hintHookP], { input: JSON.stringify({ hook_event_name: 'PostToolUse', session_id: 'ses_hint_ng', cwd: ngDir, tool_name: 'Write', tool_input: { file_path: path.join(ngDir, 'A.vue'), content: '' } }), encoding: 'utf8' });
+    ok((h5.stdout ?? '').includes('前端UI') && !(h5.stderr ?? '').includes('fatal'), '提示门：非 git 目录注入正常（状态落临时目录、stderr 零漏出）');
+    const h6 = spawnSync('node', [hintHookP], { input: '{"hook_event_name":"PostToolUse","session_id":"x","cwd":', encoding: 'utf8' });
+    ok((h6.stdout ?? '').trim() === '' && h6.status === 0, '提示门：畸形输入吞错静默（fail-open exit 0）');
+    const mechH2 = runClaude(['mech', 'install', 'TASKFLOW_GUARD', '--yes']);
+    ok(mechH2.status === 0 && /已安装|幂等/.test(mechH2.stdout), '提示门：同批重装幂等收敛');
+  }
   // N5（2026-09-27 审查 B1 教训）：渲染产物必须真跑 bash——逐行 read 块解析 bug 曾让门恒放行
   fs.writeFileSync(path.join(td2, 'decisions', '2026-01-01-somewidget.md'), '# SomeWidget 决策\n\n- 影响范围：SomeWidget.vue\n');
   const cl2 = path.join(repo2, 'docs', 'CHANGELOG.md');
@@ -2850,9 +2898,9 @@ try {
     const guardMod = await import('file://' + path.join(repoRoot, 'packs', 'host-adapters', 'assets', 'guard', 'taskflow-guard-claude.mjs'));
     const manifest = guardMod.GATE_MANIFEST_CLAUDE;
     const mechRows = mech.stdout.split('\n').filter((l) => l.includes('｜开关：'));
-    ok(mech.status === 0 && Array.isArray(manifest) && manifest.length === 4, `v3.2 T8 mechanisms：GATE_MANIFEST_CLAUDE 注册表 4 门（实际 ${Array.isArray(manifest) ? manifest.length : '非数组'}）`);
+    ok(mech.status === 0 && Array.isArray(manifest) && manifest.length === 5, `v3.2 T8 mechanisms：GATE_MANIFEST_CLAUDE 注册表 5 门（v3.4.0 提示门并入；实际 ${Array.isArray(manifest) ? manifest.length : '非数组'}）`);
     ok(mechRows.length === manifest.length, `v3.2 T8 mechanisms：输出行数与 GATE_MANIFEST_CLAUDE 一致（${mechRows.length}/${manifest.length}）`);
-    ok(['状态翻转墙', '编辑边界门', '簿记硬拦', '压缩接力', 'TF_STATUS', 'TF_BOUND', 'TF_BASH', 'TF_GUARD_LOG'].every((k) => mech.stdout.includes(k)), 'v3.2 T8 mechanisms：claude 四门中文名与 TF_ 开关齐全');
+    ok(['状态翻转墙', '编辑边界门', '簿记硬拦', '压缩接力', '领域提示门', 'TF_STATUS', 'TF_BOUND', 'TF_BASH', 'TF_GUARD_LOG', 'TF_HINT'].every((k) => mech.stdout.includes(k)), 'v3.2 T8 mechanisms：claude 五门中文名与 TF_ 开关齐全');
     const gateOfRow = (l) => { const m = l.match(/gate=([^）]*)）/); return m ? m[1] : null; };
     const gateDiff = manifest.map((m, i) => [m, gateOfRow(mechRows[i])]).filter(([m, g]) => g !== (m.gate ?? null));
     ok(gateDiff.length === 0, `2.85.0 T8 mechanisms：逐门 gate= 与 GATE_MANIFEST 一致${gateDiff.length ? `（首异：${gateDiff[0][0].name} 输出=${gateDiff[0][1]} 期望=${gateDiff[0][0].gate}）` : ''}`);
@@ -3080,6 +3128,17 @@ try {
     ok(c1t.checkpoints.length === 1 && c1t.checkpoints[0].summary === '首存' && c1t.checkpoints[0].files.includes('a.md'), 'v3 checkpoint：checkpoints[] 条目含 note/files');
     ok(c1t.conventions?.readAt && /^[0-9a-f]{16}$/.test(c1t.conventions.hash ?? ''), 'v3 checkpoint：conventions 回执 {readAt,hash} 落 task.json（F35 落痕）');
     ok(c1.stdout.includes('黄牌') && c1.stdout.includes('边界与影响面'), 'v3 checkpoint 首存黄牌：spec「边界与影响面」空 → 提醒不阻断（F33）');
+    // F33 修复锁定（v3.4.0 dogfood 实证）：表头后带空行 + 实填内容 → 不再误报黄牌（旧 lookahead `\n*$` 空行即收空捕获）；
+    // 模板未编辑（节体与渲染模板逐字节等价）→ 仍黄牌（「未重述」语义由模板比对承接，非靠误报）
+    const n2 = v3run(['new', '边界重述样例', '--tier', 'small']);
+    const v3id2 = '边界重述样例-' + new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const spec2P = path.join(v3, '.taskflow', v3id2, 'spec.md');
+    ok(n2.status === 0 && fs.existsSync(spec2P), 'v3 new 第二任务：建档落盘（F33 修复夹具）');
+    const spec2 = fs.readFileSync(spec2P, 'utf8');
+    const filled = spec2.replace(/(##\s*边界与影响面\s*\n)[\s\S]*?(?=\n## )/, '$1\n- **改动的共享资产**：`scripts/harness/validate-demo.sh`（反向依赖：收尾验证链）\n- **明确不做**（负面清单）：不动模板其余节与既有使用方行为\n');
+    fs.writeFileSync(spec2P, filled);
+    const c2 = v3run(['checkpoint', v3id2, '--note', '首存', '--files', 'a.md']);
+    ok(c2.status === 0 && !c2.stdout.includes('黄牌'), 'v3 checkpoint 首存：实填边界节（表头后带空行）→ 无黄牌（F33 空行误报修复锁定）');
     // rollback：分支无提交 → 无可回滚物报告
     const rb0 = v3run(['rollback', v3id]);
     ok(rb0.status === 0 && rb0.stdout.includes('无可回滚物'), 'v3 rollback：基线后零提交 → 报告无可回滚物');

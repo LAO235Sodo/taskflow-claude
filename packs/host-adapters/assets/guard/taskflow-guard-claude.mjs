@@ -38,6 +38,7 @@ export const GATE_MANIFEST_CLAUDE = [
   { name: 'G 编辑边界门', events: 'PreToolUse（Edit/Write/MultiEdit）', envs: ['TF_BOUND'], gate: 'boundary', what: '编辑路径对照任务声明清单，越界=缺省 ask 弹用户拍板 / enforce deny / off 跳过——单一职责与爆炸半径的机械不变量' },
   { name: 'B 簿记硬拦', events: 'PreToolUse（Bash）', envs: ['TF_BASH'], gate: 'bookkeeping', what: 'commit --files 空格分隔多文件=deny（逗号分隔才对）；红线 git（reset --hard/checkout --/clean -f/force push/branch -D）=deny（纪律①机械化）' },
   { name: 'C 压缩接力', events: 'PreCompact', envs: [], gate: 'compact-relay', what: '压缩前对 active/verifying 任务落 compact-relay.md 接力注记（铁律「先存档再跑」机械化；恢复靠 resume 读档案）' },
+  { name: 'H 领域提示门', events: 'PostToolUse（Write/Edit/MultiEdit）＋ UserPromptSubmit（缺省关 TF_HINT_PROMPT=on）', envs: ['TF_HINT', 'TF_HINT_PROMPT'], gate: 'domain-hint', what: '领域硬信号（扩展名/测试文件名）命中→注入领域提示+映射技能清单+机械在场检测（tf.mjs skills）；永不 deny/ask，fail-open；去重=每会话每领域一次（实现住 taskflow-hint-claude.mjs 同目录）' },
 ];
 
 const STATE_SNAPSHOT = { states: STATES, legal: STATE_LEGAL };
@@ -53,7 +54,8 @@ function readStdinJson() {
 function readJsonSafe(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
 function locateTasksDir(cwd) {
   try {
-    const common = execFileSync('git', ['-C', cwd ?? process.cwd(), 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
+    // stdio 显式三管道（v3.4.0 同类排查同步修）：缺省配置下 git 的 stderr 直通继承——非 git 项目每次事件漏 fatal 污染诊断视图
+    const common = execFileSync('git', ['-C', cwd ?? process.cwd(), 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
     const dir = path.join(path.dirname(common), '.taskflow');
     if (fs.existsSync(dir)) return dir;
   } catch { /* 非 git 目录 */ }

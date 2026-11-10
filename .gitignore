@@ -4,5 +4,8 @@ CHANGELOG.md
 # 手册生成器等本地文档（含本机路径，不随仓分发）
 docs/
 
+# taskflow 任务账本（SKILL.md 铁律 1：状态目录永不进 git）
+.taskflow/
+
 # v3.0.0：演示媒体仍随仓分发但不进技能触发面（assets/ 只留 shared 内核）
 !docs/media/

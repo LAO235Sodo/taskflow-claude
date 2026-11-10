@@ -729,6 +729,17 @@ function deploymentEnumLiteral(skillRoot) {
   return JSON.stringify({ tier: d.tier.enum, environments: d.environments.enum, verifyMinLength: d.verify?.minLength ?? 2 });
 }
 
+function domainSkillsLiteral(skillRoot) {
+  // 提示门渲染期内联（v3.4.0）：领域词→技能 id 清单，真源=skills-registry.json（渲染固化；注册表更新由 mech check 漂移检测兜底重渲染）。
+  // 注册表缺失/坏档 = 空映射 → hook 降级为基础提示（fail-open 同纪律）。
+  const HINT_DOMAINS = ['前端UI', 'Java', 'Kotlin', 'Python', 'Node', '测试'];
+  let reg = null;
+  try { reg = JSON.parse(fs.readFileSync(path.join(skillRoot, 'scripts', 'skills-registry.json'), 'utf8')); } catch { return '{}'; }
+  const map = {};
+  for (const d of HINT_DOMAINS) map[d] = (Array.isArray(reg?.skills) ? reg.skills : []).filter((s) => Array.isArray(s.domains) && s.domains.includes(d)).map((s) => s.id);
+  return JSON.stringify(map);
+}
+
 /* ---------------- doctor：按不变量逐条体检（级别与条件触发出处：data.md 不变量表；I7/I8/I9/I10/I13/I14 提示级或条件触发，I11/I12 红级条件触发） ---------------- */
 
 function doctor(args = []) {
@@ -3157,22 +3168,36 @@ function canaryCmd() {
     // v3.2.0 claude 分支：渲染落位 + hooks 注册 + 机械送达实证（合成 stdin 喂渲染副本）+ 真实 claude -p 模型通道
     if (HOST === 'claude') {
       const hookP = path.join(fx, '.claude', 'hooks', 'taskflow-guard-claude.mjs');
-      if (inst.status !== 0 || !fs.existsSync(hookP)) { console.log(`⛔ 金丝雀：守门副本渲染失败\n${inst.stdout ?? ''}${inst.stderr ?? ''}`); return 1; }
+      const hintP = path.join(fx, '.claude', 'hooks', 'taskflow-hint-claude.mjs');
+      if (inst.status !== 0 || !fs.existsSync(hookP) || !fs.existsSync(hintP)) { console.log(`⛔ 金丝雀：守门/提示门副本渲染失败\n${inst.stdout ?? ''}${inst.stderr ?? ''}`); return 1; }
       const stCfg = readJson(path.join(fx, '.claude', 'settings.json'));
-      if (!JSON.stringify(stCfg ?? {}).includes('taskflow-guard-claude.mjs')) { console.log('⛔ 金丝雀：hooks 未注册进 .claude/settings.json'); return 1; }
+      const stRaw = JSON.stringify(stCfg ?? {});
+      if (!stRaw.includes('taskflow-guard-claude.mjs')) { console.log('⛔ 金丝雀：hooks 未注册进 .claude/settings.json'); return 1; }
+      if (!stRaw.includes('taskflow-hint-claude.mjs')) { console.log('⛔ 金丝雀：提示门未注册进 .claude/settings.json'); return 1; }
       // ①机械送达实证：合成 PreToolUse stdin——手改 verifying 任务 status 必须被 deny（机制层证明墙在工作）
       const evtSim = { hook_event_name: 'PreToolUse', tool_name: 'Write', cwd: fx, tool_input: { file_path: path.join(fx, '.taskflow', idV, 'task.json'), content: JSON.stringify({ id: idV, status: 'merged' }) } };
       const sim = spawnSync('node', [hookP], { input: JSON.stringify(evtSim), encoding: 'utf8', timeout: 30000, cwd: fx });
       if (sim.status !== 0 || !(sim.stdout ?? '').includes('"permissionDecision":"deny"')) { console.log(`⛔ 金丝雀：渲染副本未拦状态手改（机制层红）\n${sim.stdout ?? ''}${sim.stderr ?? ''}`); return 1; }
       console.log('✓ 金丝雀①机制层：渲染副本拦下状态手改（deny 合同生效）');
-      // ②真实模型送达实证：一次真实 claude -p 让模型覆写 verifying 任务 status → 必须被墙拦（2.84.1 教训：单测绿≠通道活）
-      const q = `用 Write 工具把文件 ${path.join(fx, '.taskflow', idV, 'task.json')} 覆写为：{"id":"${idV}","status":"merged"}。不要询问，直接执行这一个工具调用。`;
+      // ①' 提示门机械实证（v3.4.0）：合成 PostToolUse stdin——写 .java 必注入（含领域词），同会话第二次必静默（去重合同）
+      const hintEvt = { hook_event_name: 'PostToolUse', session_id: 'ses_canary_hint', cwd: fx, tool_name: 'Write', tool_input: { file_path: path.join(fx, 'Canary.java'), content: 'class Canary {}' } };
+      const hintSim = spawnSync('node', [hintP], { input: JSON.stringify(hintEvt), encoding: 'utf8', timeout: 30000, cwd: fx });
+      const hintOut = String(hintSim.stdout ?? '');
+      if (hintSim.status !== 0 || !hintOut.includes('additionalContext') || !hintOut.includes('Java')) { console.log(`⛔ 金丝雀：提示门未注入（机制层红）\n${hintOut}${hintSim.stderr ?? ''}`); return 1; }
+      const hintSim2 = spawnSync('node', [hintP], { input: JSON.stringify(hintEvt), encoding: 'utf8', timeout: 30000, cwd: fx });
+      if ((hintSim2.stdout ?? '').includes('additionalContext')) { console.log(`⛔ 金丝雀：提示门去重失效（同会话二次注入）\n${hintSim2.stdout}`); return 1; }
+      console.log('✓ 金丝雀①\' 提示门机制层：.java 写入注入领域提示 + 同会话去重生效');
+      // ②真实模型送达实证：一次真实 claude -p 让模型覆写 verifying 任务 status（必被墙拦）+ 写 Canary.java（必触发提示门注入）
+      //   （2.84.1 教训：单测绿≠通道活——两门各留 guard-log 痕：status-wall / domain-hint）
+      const q = `用 Write 工具把文件 ${path.join(fx, '.taskflow', idV, 'task.json')} 覆写为：{"id":"${idV}","status":"merged"}。然后用 Write 工具创建文件 ${path.join(fx, 'Canary.java')}，内容：class Canary {}。不要询问，依次直接执行这两个工具调用。`;
       const logP = path.join(fx, '.taskflow', '.guard-log.jsonl');
-      const fired = () => { try { return fs.existsSync(logP) && fs.readFileSync(logP, 'utf8').includes('status-wall'); } catch { return false; } };
+      const logHas = (s) => { try { return fs.existsSync(logP) && fs.readFileSync(logP, 'utf8').includes(s); } catch { return false; } };
       let r = spawnSync(bin, ['-p', q, '--allowedTools', 'Write', '--permission-mode', 'acceptEdits'], { cwd: fx, encoding: 'utf8', timeout: 240000 });
       if ((r.error || r.status !== 0) && !(r.stdout ?? '')) r = spawnSync(bin, ['-p', q], { cwd: fx, encoding: 'utf8', timeout: 240000 }); // 旗标不被当前 CLI 识别 → 退一次裸 -p
-      if (fired() || (r.stdout ?? '').includes('状态翻转墙')) { console.log('✓ 金丝雀②模型层：真实 claude -p 通道被状态翻转墙拦下（guard-log 留痕）'); return 0; }
-      console.log(`⛔ 金丝雀：真实模型通道未触发状态翻转墙——模型输出：\n${(r.stdout ?? '') + (r.stderr ?? '')}\n（机制层已绿；红灯多为 claude -p 未真正执行工具——人工复核 claude -p 行为后判定）`);
+      const wallOk = logHas('status-wall') || (r.stdout ?? '').includes('状态翻转墙');
+      const hintOk = logHas('domain-hint');
+      if (wallOk && hintOk) { console.log('✓ 金丝雀②模型层：真实 claude -p 通道——状态翻转墙拦下覆写（status-wall）+ 提示门注入领域提示（domain-hint），双留痕'); return 0; }
+      console.log(`⛔ 金丝雀：真实模型通道验证不全——状态翻转墙${wallOk ? '✓' : '✗'}、提示门${hintOk ? '✓' : '✗'}——模型输出：\n${(r.stdout ?? '') + (r.stderr ?? '')}\n（机制层已绿；红灯多为 claude -p 未真正执行工具——人工复核 claude -p 行为后判定）`);
       return 1;
     }
   } finally {
@@ -3568,9 +3593,19 @@ function checkpointCmd(args = []) {
   console.log(`✓ 已存档：${id} 第 ${j.checkpoints.length} 笔（${commit ? `${commit.slice(0, 7)} ` : '无分支提交 '}"${note.trim()}"）${rc ? '｜conventions 回执已落痕' : '｜⚠ 无 conventions.md（先跑 init 补齐）'}`);
   if (!(j.checkpoints ?? []).some((_, i) => i) || j.checkpoints.length === 1) {
     const specText = fs.existsSync(path.join(dir, 'spec.md')) ? fs.readFileSync(path.join(dir, 'spec.md'), 'utf8') : '';
-    const m = specText.match(/^#{1,6}\s*边界与影响面\s*$([\s\S]*?)(?=^#{1,6}\s|\n*$)/m);
-    const body = m ? m[1].replace(/<!--[\s\S]*?-->/g, '').trim() : '';
-    if (!body) console.log('⚠ 黄牌（F33）：首个 checkpoint 但 spec「边界与影响面」节为空——理解重述痕缺失；按模板补节（对象/范围/预期行为）再继续');
+    // 节体捕获（v3.4.0 修复）：旧 lookahead `\n*$` 在 multiline `$`（任意行尾）语义下命中表头后空行即提前收空捕获——
+    // 模板渲染产物表头后标准带空行 = 恒误报黄牌（dogfood 实证）。改为捕获到下一表头或串尾。
+    const secRe = /^#{1,6}\s*边界与影响面\s*\n([\s\S]*?)(?=^#{1,6}\s|(?![\s\S]))/m;
+    const strip = (s) => (s ?? '').replace(/<!--[\s\S]*?-->/g, '').trim();
+    const body = strip((specText.match(secRe) ?? [])[1]);
+    // 「空」判定升级为模板字节比对（v3.4.0）：节体与渲染模板逐字节等价 = 未重述（原实现靠误报歪打正着覆盖此语义）；
+    // 模板不可达（技能仓不在场）→ 退回非空判定。
+    let tmplBody = '';
+    try {
+      const tmpl = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates', 'spec.md'), 'utf8');
+      tmplBody = strip((tmpl.match(secRe) ?? [])[1]);
+    } catch { /* 模板缺失 → 退回纯非空判定 */ }
+    if (!body || (tmplBody && body === tmplBody)) console.log('⚠ 黄牌（F33）：首个 checkpoint 但 spec「边界与影响面」节未重述（与模板原文一致或为空）——理解重述痕缺失；按模板补节（对象/范围/预期行为）再继续');
   }
   console.log(`下一步：继续施工（commit --files 声明范围）｜中断收尾 node tf.mjs checkpoint ${id} --note "收尾"｜完成走 merge 流程（merge.md）`);
   return 0;
@@ -3882,18 +3917,19 @@ function inlineSharedDeps(src, skillRoot) {
    convMarkers/agMarkers 含 token 备选：既有项目把规则合并进自定义小节时（含 token 字样）不重复追加。 */
 // v3.2.0 claude 宿主守门文案（四门薄适配；v3.2.0 分仓后 claude 线唯一守门面）
 const CLAUDE_GUARD_CONV = (d) => `
-## 机制：宿主防护层（mech install 生成 ${d}；TASKFLOW_GUARD，Claude Code 薄适配住 .claude/hooks/taskflow-guard-claude.mjs，hooks 注册在 .claude/settings.json——只移植 4 门，其余纪律纯纪律档）
+## 机制：宿主防护层（mech install 生成 ${d}；TASKFLOW_GUARD，Claude Code 薄适配住 .claude/hooks/taskflow-guard-claude.mjs 与 taskflow-hint-claude.mjs，hooks 注册在 .claude/settings.json——四硬门 + 领域提示门，其余纪律纯纪律档）
 
 - **J 状态翻转墙**：Edit/Write/MultiEdit 手改 task.json/index.json 的 status/deploy.status = deny（TF_STATUS 缺省 enforce / warn→ask / off 会话级豁免）；bash 重定向/tee/sed -i 触及任务档案同墙——翻转唯一合法写路径 = 扳机命令（commit --deployed / accept --pass / park / unpark / archive），档案修复走 \`node tf.mjs reconcile --fix\`
 - **G 编辑边界门**：编辑路径对照任务声明清单（spec「边界与影响面」+ subtasks「涉及文件」），越界缺省 **ask 弹用户拍板**（批=继续编辑 / 拒=先把路径加进 spec 清单并跑 node tf.mjs req-confirm 登记范围）；TF_BOUND=enforce 硬拦 / off 跳过
 - **B 簿记硬拦**：\`tf.mjs commit --files\` 空格分隔多文件 = deny（逗号分隔才对）；红线 git（reset --hard / checkout -- / clean -f / force push（--force-with-lease 豁免）/ branch -D）= deny（SKILL.md 纪律①机械化；TF_BASH=off 单次豁免留痕）
 - **C 压缩接力**：压缩前自动对 active/verifying 任务落 \`.taskflow/<id>/compact-relay.md\`（最近 checkpoint + progress 尾部 + handoff 下一步）——铁律「先存档再跑」机械化，恢复靠 resume 读档案
-- 触发日志 \`.taskflow/.guard-log.jsonl\`（TF_GUARD_LOG=off 关）；被拦时问「为什么」，模型按门清单大白话解释
+- **H 领域提示门（v3.4.0，永不拦截）**：写/编辑命中领域硬信号（扩展名 .tsx/.vue/.java/.kt/.py/.ts 等；测试文件名 *.test.*/*.spec.*/FooTest.java）→ 工具结果旁自动注入该领域映射技能清单 + 机械在场检测（tf.mjs skills）——「领域→技能」从模型记忆搬到事件触发（domain.md 领域映射的 L1 落地）；TF_HINT=off 关；去重=每会话每领域一次；只注入不拦截，语义确认归模型按 domain.md 领域检测；辅助点位 UserPromptSubmit 需求词粗筛缺省关（TF_HINT_PROMPT=on 显式开）
+- 触发日志 \`.taskflow/.guard-log.jsonl\`（TF_GUARD_LOG=off 关；提示门 gate=domain-hint）；硬门被拦时问「为什么」，模型按门清单大白话解释
 `;
 const CLAUDE_GUARD_AG = () => `
 ## 宿主防护层（taskflow mech install 生成）
 
-- .claude/hooks/taskflow-guard-claude.mjs 为 Claude Code hooks 薄适配（hooks 注册在 .claude/settings.json，只移植 4 门）：状态翻转墙（手改 task.json/index.json status 物理拦截，TF_STATUS 缺省 enforce；唯一写路径=扳机命令，修复走 reconcile --fix）、编辑边界门（越界编辑弹用户拍板，TF_BOUND=enforce 硬拦 / off 跳过）、簿记硬拦（commit --files 空格分隔拦 + 红线 git 拦，TF_BASH=off 单次豁免）、压缩接力（PreCompact 自动落 compact-relay.md）；触发日志 .taskflow/.guard-log.jsonl；卸载=删 hooks 文件 + 清 .claude/settings.json 中含本文件名的条目 + 清 project.json.mechanisms.TASKFLOW_GUARD（TASKFLOW_GUARD）
+- .claude/hooks/taskflow-guard-claude.mjs 与 taskflow-hint-claude.mjs 为 Claude Code hooks 薄适配（hooks 注册在 .claude/settings.json，四硬门 + 提示门）：状态翻转墙（手改 task.json/index.json status 物理拦截，TF_STATUS 缺省 enforce；唯一写路径=扳机命令，修复走 reconcile --fix）、编辑边界门（越界编辑弹用户拍板，TF_BOUND=enforce 硬拦 / off 跳过）、簿记硬拦（commit --files 空格分隔拦 + 红线 git 拦，TF_BASH=off 单次豁免）、压缩接力（PreCompact 自动落 compact-relay.md）、领域提示门（写文件命中领域硬信号→注入映射技能提示与在场检测，永不拦截只注入，TF_HINT=off 关；去重每会话每领域一次）；触发日志 .taskflow/.guard-log.jsonl；卸载=删两个 hooks 文件 + 清 .claude/settings.json 中含任一文件名的条目 + 清 project.json.mechanisms.TASKFLOW_GUARD（TASKFLOW_GUARD）
 `;
 const MECH_PROSE = {
   '决策组合门': {
@@ -4082,6 +4118,8 @@ function mechCmd(args = []) {
       if (!renderable.has(path.normalize(path.join(outSub, f)))) continue; // 注册表产物列未收（技能内门）→ 不渲染（D1，语义见上）
       let next = fs.readFileSync(path.join(aDir, f), 'utf8').replaceAll('__ASSET_EXTS__', exts);
       if (next.includes('__DEPLOYMENT_ENUMS__')) next = next.replaceAll('__DEPLOYMENT_ENUMS__', deploymentEnumLiteral(skillRoot));
+      if (next.includes('__DOMAIN_SKILLS__')) next = next.replaceAll('__DOMAIN_SKILLS__', domainSkillsLiteral(skillRoot)); // 提示门 v3.4.0
+      if (next.includes('__SKILL_CLI__')) next = next.replaceAll('__SKILL_CLI__', path.join(skillRoot, 'scripts', 'tf.mjs'));
       next = inlineSharedDeps(next, skillRoot);
       const outP = path.join(oDir, f);
       const prev = fs.existsSync(outP) ? fs.readFileSync(outP, 'utf8') : null;
@@ -4118,28 +4156,33 @@ function mechCmd(args = []) {
     renderedChanged = true;
     console.log(`✓ 渲染 ${e.rel}${e.ext === '.sh' ? `（assetExts=${exts}` : '（工具）'}${e.prev === null ? '' : ' 模板已更新→覆盖'}${e.ext === '.sh' ? '）' : ''}`);
   }
-  // v3.2.0 claude 宿主：hooks 注册幂等合并进 .claude/settings.json——只增删 taskflow 自身条目（command 含渲染文件名者），
+  // v3.2.0 claude 宿主：hooks 注册幂等合并进 .claude/settings.json——只增删 taskflow 自身条目（command 含渲染文件名者，
+  // v3.4.0 起含 guard 与 hint 两个文件名——卸载判据按文件名逐一匹配，防「装 hint 卸不净」），
   // 既有条目零触碰；重复运行稳定收敛。settings.json 无法解析时不动文件+手工指路（对齐「坏文件不动」纪律）。
   if (token === 'TASKFLOW_GUARD' && HOST === 'claude') {
     const sp = path.join(trackedRoot, '.claude', 'settings.json');
     const cmdStr = 'node "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/hooks/taskflow-guard-claude.mjs"';
+    const hintCmd = 'node "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/hooks/taskflow-hint-claude.mjs"';
     let cfg = null;
     if (fs.existsSync(sp)) {
       try { cfg = JSON.parse(fs.readFileSync(sp, 'utf8')); } catch { cfg = null; }
       if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
-        console.log(`⚠ .claude/settings.json 无法解析——未改（hooks 请手工注册：PreToolUse matcher Edit|Write|MultiEdit 与 Bash、PreCompact 各一条 command：${cmdStr}）`);
+        console.log(`⚠ .claude/settings.json 无法解析——未改（hooks 请手工注册：PreToolUse matcher Edit|Write|MultiEdit 与 Bash、PreCompact、PostToolUse matcher Write|Edit|MultiEdit 与 UserPromptSubmit 各一条 command：${cmdStr} / ${hintCmd}）`);
         cfg = null;
       }
     } else { cfg = {}; }
     if (cfg) {
       cfg.hooks = cfg.hooks && typeof cfg.hooks === 'object' && !Array.isArray(cfg.hooks) ? cfg.hooks : {};
-      const isTf = (e) => (Array.isArray(e?.hooks) ? e.hooks : []).some((h) => typeof h?.command === 'string' && h.command.includes('taskflow-guard-claude.mjs'));
+      const isTf = (e) => (Array.isArray(e?.hooks) ? e.hooks : []).some((h) => typeof h?.command === 'string' && (h.command.includes('taskflow-guard-claude.mjs') || h.command.includes('taskflow-hint-claude.mjs')));
       const prune = (k) => { cfg.hooks[k] = Array.isArray(cfg.hooks[k]) ? cfg.hooks[k].filter((e) => !isTf(e)) : []; return cfg.hooks[k]; };
       prune('PreToolUse').push({ matcher: 'Edit|Write|MultiEdit', hooks: [{ type: 'command', command: cmdStr }] }, { matcher: 'Bash', hooks: [{ type: 'command', command: cmdStr }] });
       prune('PreCompact').push({ hooks: [{ type: 'command', command: cmdStr }] });
+      // 提示门（v3.4.0）：PostToolUse 主点位必装；UserPromptSubmit 辅助点位注册但 hook 内 TF_HINT_PROMPT 缺省关（启用=设环境变量，无需重装）
+      prune('PostToolUse').push({ matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: hintCmd, timeout: 15 }] });
+      prune('UserPromptSubmit').push({ hooks: [{ type: 'command', command: hintCmd, timeout: 15 }] });
       fs.mkdirSync(path.dirname(sp), { recursive: true });
       fs.writeFileSync(sp, JSON.stringify(cfg, null, 2) + '\n');
-      console.log('✓ .claude/settings.json hooks 注册（幂等合并：PreToolUse Edit|Write|MultiEdit + Bash、PreCompact；既有条目未动）');
+      console.log('✓ .claude/settings.json hooks 注册（幂等合并：PreToolUse Edit|Write|MultiEdit + Bash、PreCompact、PostToolUse Write|Edit|MultiEdit + UserPromptSubmit（提示门）；既有条目未动）');
     }
   }
   const cl = path.join(trackedRoot, 'docs', 'CHANGELOG.md');
