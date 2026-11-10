@@ -23,7 +23,8 @@
   "touch": [
     "PACK.md",
     "references/entry-routes.md",
-    "references/domain.md"
+    "references/domain.md",
+    "references/new-task.md"
   ],
   "plain": "宿主层的防护栏与提示灯：拦危险命令与状态手改、编辑越界弹人拍板、压缩会话时自动落接力快照，写文件命中领域硬信号时自动注入该领域映射技能提示与在场检测（claude 宿主五门——提示门永不拦截只注入；其余宿主降级纯纪律档；omp 线住原仓 taskflow）"
 }

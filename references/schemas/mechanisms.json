@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-10T02:18:54.117Z",
+  "generatedAt": "2026-11-10T03:17:16.157Z",
   "source": "packs(8)+core",
   "mechanisms": [
     {
@@ -324,7 +324,8 @@
       "touch": [
         "packs/host-adapters/PACK.md",
         "references/entry-routes.md",
-        "references/domain.md"
+        "references/domain.md",
+        "references/new-task.md"
       ],
       "triggers": [
         "守门",

@@ -2,6 +2,7 @@
 
 > 能力包：宿主扩展的规则与资产。**宿主差异单点 = `assets/shared/host-adapter.mjs`**（detectHost/usagePath/planScanDirs/guardTargets/redlineFile/canaryCmdBin）。
 > 安装：`node <skill目录>/scripts/tf.mjs mech install TASKFLOW_GUARD`——claude 宿主装五门薄适配（四硬门 + 领域提示门）；其余宿主打印「本宿主无守门通道，已降级纯纪律档（conventions 红线 + doctor）」不落盘。omp 线（18 门全集）住原仓 `LAO235Sodo/taskflow`，本仓不携带。
+> **延迟初始化呈报（v3.6.0）**：用户不需要记得这条命令——`tf.mjs new` 在 host=claude 且未采纳且未拒时自动打印启用指引，编排层按 new-task.md 第 8 步呈报条款一次一问代跑（同意即装 + 金丝雀；拒绝跑 `mech decline TASKFLOW_GUARD` 落 profile.mech_declined 永不再问）；装/拒后提示行自动消失。
 
 ## claude 宿主五门薄适配（v3.2.0 四门 + v3.4.0 提示门；住 `.claude/hooks/taskflow-guard-claude.mjs` 与 `.claude/hooks/taskflow-hint-claude.mjs`）
 

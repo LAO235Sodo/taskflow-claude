@@ -1263,6 +1263,26 @@ try {
     fs.appendFileSync(path.join(tdH, '.guard-log.jsonl'), JSON.stringify({ ts: '2026-11-10T01:00:00Z', gate: 'domain-hint', action: 'inject', detail: 'Java（.java 文件写入）｜ses=aaaa1111' }) + '\n');
     const hs = runClaude(['hint-stats']);
     ok(hs.status === 0 && hs.stdout.includes('总注入：') && hs.stdout.includes('会话（ses= 键在档的）：1') && hs.stdout.includes('Java×'), '提示门：hint-stats 审计聚合（ses= 键跨会话计数、只读 exit 0）');
+    // 宿主防护层延迟初始化呈报（v3.6.0）：new 触发、装/拒后消失、decline 落痕永不再问
+    const repoH2 = path.join(tmp, 'repoH2');
+    fs.mkdirSync(repoH2, { recursive: true });
+    sh('git init -q -b main && git config user.email t@t.local && git config user.name t && echo ".taskflow/" >> .git/info/exclude', repoH2);
+    sh('echo x > f.txt && git add -A && git commit -qm init', repoH2);
+    fs.mkdirSync(path.join(repoH2, '.taskflow'), { recursive: true });
+    fs.writeFileSync(path.join(repoH2, '.taskflow', 'project.json'), J({ key: 'sandbox/repoH2', name: 'repoH2', repoRoot: repoH2, remote: null, git: true, createdAt: now, lastActiveAt: now }));
+    fs.writeFileSync(path.join(repoH2, '.taskflow', 'profile.json'), J({ confirm_tier: 'detailed', host: 'auto' }));
+    const runH2 = (args) => spawnSync('node', [script, ...args], { cwd: repoH2, encoding: 'utf8', env: { ...process.env, TF_HOST: 'claude', TF_TASKFLOW_HOME: TF_HOME_TEST } });
+    const nH = runH2(['new', '呈报触发样例', '--tier', 'small', '--no-worktree']);
+    ok(nH.status === 0 && nH.stdout.includes('未采纳宿主防护层 TASKFLOW_GUARD') && nH.stdout.includes('mech decline'), '防护层呈报：new 在 host=claude 未采纳未拒时打印启用指引');
+    const dec1 = runH2(['mech', 'decline', 'TASKFLOW_GUARD']);
+    const profH2 = JSON.parse(fs.readFileSync(path.join(repoH2, '.taskflow', 'profile.json'), 'utf8'));
+    ok(dec1.status === 0 && Array.isArray(profH2.mech_declined) && profH2.mech_declined.includes('TASKFLOW_GUARD'), '防护层呈报：decline 落 profile.mech_declined（簿记写入口）');
+    const dec2 = runH2(['mech', 'decline', 'TASKFLOW_GUARD']);
+    const profH2b = JSON.parse(fs.readFileSync(path.join(repoH2, '.taskflow', 'profile.json'), 'utf8'));
+    ok(dec2.status === 0 && profH2b.mech_declined.filter((t) => t === 'TASKFLOW_GUARD').length === 1, '防护层呈报：decline 幂等（不重复写）');
+    const nH2 = runH2(['new', '呈报静默样例', '--tier', 'small', '--no-worktree']);
+    ok(nH2.status === 0 && !nH2.stdout.includes('未采纳宿主防护层'), '防护层呈报：拒后 new 不再提示（永不再问合同）');
+    ok(!runH2(['mech', 'decline']).status === false || runH2(['mech', 'decline']).status === 1, '防护层呈报：decline 缺 token → 用法提示 exit 1');
   }
   // N5（2026-09-27 审查 B1 教训）：渲染产物必须真跑 bash——逐行 read 块解析 bug 曾让门恒放行
   fs.writeFileSync(path.join(td2, 'decisions', '2026-01-01-somewidget.md'), '# SomeWidget 决策\n\n- 影响范围：SomeWidget.vue\n');
