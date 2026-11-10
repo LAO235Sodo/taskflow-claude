@@ -1,5 +1,5 @@
 {
-  "_comment": "项目 profile（v3.0.0，F08/F09/F44）：建档/resume/merge/checkpoint 四触点先读本文件——门族启用、任务类型裁剪、确认档位、宿主声明以此为唯一真源。由 tf.mjs init 渲染/升级；模型禁自改确认档位。",
+  "_comment": "项目 profile（v3.0.0，F08/F09/F44）：建档/resume/merge/checkpoint 四触点先读本文件——门族启用、任务类型裁剪、确认档位、宿主声明以此为唯一真源。由 tf.mjs init 渲染/升级；模型禁自改确认档位。登记含缺陷修复行为的类型（bugfix 类）时，spec_sections 白名单必须含「假设清单」（多假设排序落档节，v3.3.0）——漏登记 = 门被脚手架剪掉。",
   "confirm_tier": "detailed",
   "host": "auto",
   "deploy_form": "none",
