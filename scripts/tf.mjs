@@ -3143,9 +3143,41 @@ function mechanismsCmd() {
 }
 
 /* ---------------- canary：送达金丝雀（v2.87.0；一次真实模型调用）----------------
-   治「注入面改动单测全绿但通道死」（2.84.1 实锤：E/U/V 三墙静默 no-op 19 天，单测夹具传假 payload 形状遮蔽通道死）：
+   治「注入面改动单测全绿但通道死」（2.84.1 实锤：E/U/V 三墙静默 no-op 19 天，单体夹具传假 payload 形状遮蔽通道死）：
    /tmp 夹具仓渲染守门副本 → 真实 omp -p 零工具提问 → 模型仅凭 system 注入答出 verifying 任务 id = 送达实证。
    omp 不在 PATH（spawnSync ENOENT）=跳过 exit 0（无 omp 环境合法）；答错/超时=⛔ exit 1 收尾红灯——禁只靠单测宣称注入生效。 */
+
+/* ---------------- hint-stats：提示门注入审计（v3.5.0，只读恒 exit 0）----------------
+   数据源 = .taskflow/.guard-log.jsonl gate=domain-hint 注入流水（ses= 键 v3.5.0 起入行）。
+   回答的问题：提示门实际触发了多少次、什么领域、跨几个会话——「提示→技能加载」转化的粗测需要
+   人力对照（对每个「感觉帮上了」的时刻记一笔实际加载），数据攒够再决定 TF_HINT_PROMPT 开关或埋点立项。 */
+function hintStatsCmd() {
+  const { tasksDir } = locate();
+  const logP = path.join(tasksDir, '.guard-log.jsonl');
+  if (!fs.existsSync(logP)) { console.log('暂无注入流水（.taskflow/.guard-log.jsonl 不存在）——提示门需已安装且 TF_GUARD_LOG 非 off；装了还没触发过 = 写个 .java/.vue 文件试试（新会话生效）'); return 0; }
+  const rows = [];
+  for (const l of fs.readFileSync(logP, 'utf8').split('\n')) {
+    if (!l.trim()) continue;
+    try { const j = JSON.parse(l); if (j.gate === 'domain-hint' && j.action === 'inject') rows.push(j); } catch { /* 坏行跳过 */ }
+  }
+  if (!rows.length) { console.log(`流水在档（守门日志 ${fs.readFileSync(logP, 'utf8').split('\n').filter((l) => l.trim()).length} 行）但尚无 domain-hint 注入——写个 .java/.vue 文件试试（新会话生效）`); return 0; }
+  const byDomain = {}; const byDay = {}; const sess = new Set();
+  for (const r of rows) {
+    const d = String(r.detail ?? '');
+    const dm = d.match(/^([^（|]+)/);
+    byDomain[dm ? dm[1].trim() : '?'] = (byDomain[dm ? dm[1].trim() : '?'] ?? 0) + 1;
+    byDay[String(r.ts ?? '').slice(0, 10)] = (byDay[String(r.ts ?? '').slice(0, 10)] ?? 0) + 1;
+    const sm = d.match(/ses=([0-9a-fA-F-]+)/);
+    if (sm) sess.add(sm[1]);
+  }
+  const days = Object.keys(byDay).sort();
+  console.log('# 提示门注入审计（只读；数据源 .guard-log.jsonl gate=domain-hint）');
+  console.log(`总注入：${rows.length} 次｜领域：${Object.keys(byDomain).length} 个｜会话（ses= 键在档的）：${sess.size} 个｜跨度：${days[0]} ~ ${days[days.length - 1]}`);
+  console.log(`按领域：${Object.entries(byDomain).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}×${v}`).join('、')}`);
+  console.log(`按日：${days.slice(-10).map((d) => `${d.slice(5)}×${byDay[d]}`).join('、')}`);
+  console.log('人力对照法：注入次数（上表）≠ 加载次数——对「感觉帮上了」的时刻记一笔实际 Skill 加载，攒够数据再决定 TF_HINT_PROMPT 开关或埋点立项。');
+  return 0;
+}
 function canaryCmd() {
   const bin = canaryCmdBin(HOST); // v3.0.0 经 adapter（F36）：omp→'omp'，其余宿主 null=无单轮通道，直接静默跳过不打印
   if (!bin) return 0;
@@ -3797,6 +3829,7 @@ const COMMANDS = [
   { name: 'hygiene', usage: `  node tf.mjs hygiene [--diff [基线]] [--root <目录>]  公开仓卫生扫描（PUBLIC_HYGIENE_GATE）：全树缺省/--diff 增量；词表唯一源 assets/harness/hygiene-terms.json；block=exit 1（细则 references/public-hygiene.md）`, run: (rest) => hygieneCmd(rest) },
   { name: 'skills', usage: `  node tf.mjs skills [领域词]           领域技能在场检测：缺哪些+怎么装；呈用户选装（不装则如实注记）（只读）；--usage=技能加载埋点报表（TF_SKILL_USAGE 单文件聚合，仅 omp 侧显式 skill:// 加载计数）`, run: (rest) => skillsCmd(rest) },
   { name: 'mechanisms', usage: `  node tf.mjs mechanisms               guard 门清单（机制透明化，v2.83.0，只读）：逐行输出宿主防护层每个门的中文名/管什么/开关 env/是否写触发日志——被拦或被提醒时按它向用户解释原因`, run: () => mechanismsCmd() },
+  { name: 'hint-stats', usage: `  node tf.mjs hint-stats                  提示门注入审计（v3.5.0，只读恒 exit 0）：domain-hint 流水按领域/按日/会话分布——评估「提示→技能加载」转化的人力对照流水`, run: () => hintStatsCmd() },
   { name: 'canary', usage: `  node tf.mjs canary                        送达金丝雀：/tmp 夹具仓渲染守门副本+真实 omp -p 验证注入达模型（一次模型调用；omp 缺失则跳过 exit 0）`, run: () => canaryCmd() },
   { name: 'release', usage: `  node tf.mjs release <version> [--canary] [--dry-run]  发版链（v3.0.0 简化）：版本写入（frontmatter 单点）→lint→回归→commit(feat(v<版>):CHANGELOG顶条目标题)→tag v<版>→push origin main --tags（远程不可达=警告不失败，手动补推）→各安装位 self-update 提示；--dry-run 打印计划零执行；幂等重跑跳过已达成步骤；前置红=顶条目非目标版本/未跟踪文件未add/非 main`, run: (rest) => releaseCmd(rest) },
   { name: 'accept', usage: `  node tf.mjs accept <task-id> [--pass]  缺省=验收简报：任务是什么/部署状态/验什么/怎么验/怎么回复；--pass=机械翻转 *→merged（前置=分支已并入主分支，幂等）`, run: (rest) => accept(rest[0], rest.slice(1)) },

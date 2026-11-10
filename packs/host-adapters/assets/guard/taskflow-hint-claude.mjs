@@ -145,7 +145,7 @@ function handlePostToolUse(evt, cwd) {
   if (seenBefore(cwd, sessionId, domain)) return;
   const signal = isTestFile(path.basename(String(raw))) ? `测试文件名（${path.basename(raw)}）` : `${path.extname(raw)} 文件写入`;
   markSeen(cwd, sessionId, domain);
-  guardLog(cwd, 'domain-hint', 'inject', `${domain}（${signal}）`);
+  guardLog(cwd, 'domain-hint', 'inject', `${domain}（${signal}）｜ses=${sessionId.slice(0, 8)}`); // ses= 审计键（hint-stats 跨会话统计）
   hintOut('PostToolUse', hintText(domain, signal, checkSkills(domain)));
 }
 
@@ -162,7 +162,7 @@ function handleUserPromptSubmit(evt, cwd) {
   const domain = hit[1];
   if (seenBefore(cwd, sessionId, domain)) return;
   markSeen(cwd, sessionId, domain);
-  guardLog(cwd, 'domain-hint', 'inject', `${domain}（需求词粗筛）`);
+  guardLog(cwd, 'domain-hint', 'inject', `${domain}（需求词粗筛）｜ses=${sessionId.slice(0, 8)}`);
   hintOut('UserPromptSubmit', hintText(domain, '需求词粗筛', checkSkills(domain)));
 }
 

@@ -1259,6 +1259,10 @@ try {
     ok((h6.stdout ?? '').trim() === '' && h6.status === 0, '提示门：畸形输入吞错静默（fail-open exit 0）');
     const mechH2 = runClaude(['mech', 'install', 'TASKFLOW_GUARD', '--yes']);
     ok(mechH2.status === 0 && /已安装|幂等/.test(mechH2.stdout), '提示门：同批重装幂等收敛');
+    // hint-stats 注入审计（v3.5.0）：ses= 审计键入行 → 跨会话聚合
+    fs.appendFileSync(path.join(tdH, '.guard-log.jsonl'), JSON.stringify({ ts: '2026-11-10T01:00:00Z', gate: 'domain-hint', action: 'inject', detail: 'Java（.java 文件写入）｜ses=aaaa1111' }) + '\n');
+    const hs = runClaude(['hint-stats']);
+    ok(hs.status === 0 && hs.stdout.includes('总注入：') && hs.stdout.includes('会话（ses= 键在档的）：1') && hs.stdout.includes('Java×'), '提示门：hint-stats 审计聚合（ses= 键跨会话计数、只读 exit 0）');
   }
   // N5（2026-09-27 审查 B1 教训）：渲染产物必须真跑 bash——逐行 read 块解析 bug 曾让门恒放行
   fs.writeFileSync(path.join(td2, 'decisions', '2026-01-01-somewidget.md'), '# SomeWidget 决策\n\n- 影响范围：SomeWidget.vue\n');

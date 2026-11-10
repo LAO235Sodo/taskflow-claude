@@ -16,6 +16,7 @@
 | H 领域提示门（v3.4.0，**永不拦截**） | PostToolUse（Write/Edit/MultiEdit）+ UserPromptSubmit（缺省关） | `TF_HINT` 缺省开 / **off**；`TF_HINT_PROMPT` 缺省关 / on | 写/编辑命中领域硬信号（扩展名 .tsx/.vue/.java/.kt/.py/.ts 等 + 测试文件名形态）→ 工具结果旁注入「领域提示 + 映射技能清单 + 机械在场检测（tf.mjs skills）」——domain.md「领域→技能映射」的 L1 事件注入落地；去重=每会话每领域一次（`.taskflow/.hint-state.json`，无 taskflow 项目落系统临时目录按 cwd 哈希隔离）；**只注入不拦截，fail-open 吞错静默，语义确认归模型按 domain.md 领域检测**；UserPromptSubmit 需求词粗筛无 matcher 每条 prompt 触发、噪声面大故缺省闭（启用=TF_HINT_PROMPT=on，无需重装） |
 
 - 门清单真源 = 渲染源 `GATE_MANIFEST_CLAUDE`（`node tf.mjs mechanisms` 看；机制透明化口径同原仓）；触发日志 `.taskflow/.guard-log.jsonl`（`TF_GUARD_LOG=off` 关；gate token：status-wall/boundary/bookkeeping/compact-relay/domain-hint）；
+- 注入审计：`node tf.mjs hint-stats`（v3.5.0，只读恒 exit 0）——domain-hint 流水按领域/按日/会话分布，回答「提示门实际触发了多少次」；「提示→技能加载」转化率粗测走人力对照（对「感觉帮上了」的时刻记一笔实际加载），数据攒够再决定 TF_HINT_PROMPT 开关或埋点立项；
 - 提示门零干扰边界（与四硬门不同）：**不要求项目采纳 TASKFLOW_GUARD**——hook 装进项目（settings 注册）即工作，无 `.taskflow/` 项目状态落系统临时目录；已知边界（一期不展开）：非 taskflow 项目享受提示门需单项目安装路径（`--global` 用户级注册列二期）；
 - 四硬门零干扰边界：项目无 `.taskflow/` 或未采纳 TASKFLOW_GUARD = 全门静默；handler 整体吞错（fail-open，守门自身故障不阻断用户工具流）；
 - 卸载 = 删 `.claude/hooks/` 两个 taskflow 文件 + 清 settings.json 含 guard/hint 任一文件名的 hook 条目 + 清 `project.json.mechanisms.TASKFLOW_GUARD`；
