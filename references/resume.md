@@ -1,7 +1,7 @@
 # list & resume（恢复）
 
 1. 定位项目。
-2. **扫描"最近活跃工作"**：跑 `scripts/tf.mjs ls`——登记任务表 + 游离工作一次给出（降噪已内置：近 3 天有提交或改动、上限 8 条、跳过 adopt-ignore、plan 目录扫描、同前缀提示；**verifying 任务置顶打印「📌 待你验收」块并显示挂起天数**）。脚本缺失/报错 → 手工兜底：index.json 的 active/verifying 按 lastActiveAt 倒序（verifying 显示"等验收"并**排最前、注明挂起天数**，与 ls 输出规则一致）；游离=未登记 worktree + 近 3 天活跃分支（排除主分支/备份命名）+ 宿主 plan 目录（经 planScanDirs 配置：omp=`~/.opencode/plan`、claude=`~/.claude/plans`）文件头匹配本项目的交接文档（plan mode 只能写全局目录，漏网重灾区）；跳过 adopt-ignore.json（含前缀模式），上限 8 条。同前缀 ≥3 个未登记 worktree → 问一次"加入忽略清单？"，确认后以前缀模式写入 adopt-ignore.json
+2. **扫描"最近活跃工作"**：跑 `scripts/tf.mjs ls`——登记任务表 + 游离工作一次给出（降噪已内置：近 3 天有提交或改动、上限 8 条、跳过 adopt-ignore、plan 目录扫描、同前缀提示；**verifying 任务置顶打印「📌 待你验收」块并显示挂起天数**）。脚本缺失/报错 → 手工兜底：index.json 的 active/verifying 按 lastActiveAt 倒序（verifying 显示"等验收"并**排最前、注明挂起天数**，与 ls 输出规则一致）；游离=未登记 worktree + 近 3 天活跃分支（排除主分支/备份命名）+ 宿主 plan 目录（经 planScanDirs 配置：omp=`~/.opencode/plan`、claude=`~/.claude/plans`、opencode2=无——V2 plan mode 走 agent 无全局目录）文件头匹配本项目的交接文档（plan mode 只能写全局目录，漏网重灾区）；跳过 adopt-ignore.json（含前缀模式），上限 8 条。同前缀 ≥3 个未登记 worktree → 问一次"加入忽略清单？"，确认后以前缀模式写入 adopt-ignore.json
 3. **把 ls 的登记任务表格原样输出给用户**（markdown 表格含目标列，不缩写、不散文化——用户靠它知道每个任务是干嘛的；「已搁置」任务原样呈现并在呈报时注明「已搁置：<原因>；恢复跑 unpark」），第一个问题 = "继续哪个？"：
    - 登记任务 → 直接继续（按各自流程走）
    - 游离工作 → 三个出口：**继续（先按 adopt.md 收编补档案）** / 仅收编建档 / 忽略并记住（adopt-ignore.json）

@@ -12,8 +12,9 @@ import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const script = new URL('./tf.mjs', import.meta.url).pathname;
+const script = fileURLToPath(new URL('./tf.mjs', import.meta.url)); // fileURLToPath 解码（v3.8.0 修：.pathname 保留百分号编码——CJK worktree 路径下全量 spawn MODULE_NOT_FOUND 实证）
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-test-'));
 const repo = path.join(tmp, 'repo');
 let failures = 0;
@@ -1283,6 +1284,83 @@ try {
     const nH2 = runH2(['new', '呈报静默样例', '--tier', 'small', '--no-worktree']);
     ok(nH2.status === 0 && !nH2.stdout.includes('未采纳宿主防护层'), '防护层呈报：拒后 new 不再提示（永不再问合同）');
     ok(!runH2(['mech', 'decline']).status === false || runH2(['mech', 'decline']).status === 1, '防护层呈报：decline 缺 token → 用法提示 exit 1');
+  }
+
+  // opencode2 宿主五门（v3.8.0）：渲染落位（plugin 目录即装）+ 五门判定（渲染副本 __test=生产同分派路径）+ 呈报/幂等/对账
+  {
+    const repoO = path.join(tmp, 'repoO');
+    fs.mkdirSync(repoO, { recursive: true });
+    sh('git init -q -b main && git config user.email t@t.local && git config user.name t && echo ".taskflow/" >> .git/info/exclude', repoO);
+    sh('echo x > f.txt && git add -A && git commit -qm init', repoO);
+    const tdO = path.join(repoO, '.taskflow');
+    fs.mkdirSync(tdO, { recursive: true });
+    fs.writeFileSync(path.join(tdO, 'project.json'), J({ key: 'sandbox/repoO', name: 'repoO', repoRoot: repoO, remote: null, git: true, createdAt: now, lastActiveAt: now }));
+    fs.writeFileSync(path.join(tdO, 'index.json'), J({ tasks: [] }));
+    const runO2 = (args) => spawnSync('node', [script, ...args], { cwd: repoO, encoding: 'utf8', env: { ...process.env, TF_HOST: 'opencode2', TF_TASKFLOW_HOME: TF_HOME_TEST } });
+    const plugP = path.join(repoO, '.opencode', 'plugins', 'taskflow-guard', 'index.js');
+    const instO = runO2(['mech', 'install', 'TASKFLOW_GUARD', '--yes']);
+    ok(instO.status === 0 && fs.existsSync(plugP), 'opencode2 五门：mech install 渲染 plugin 落位（.opencode/plugins/taskflow-guard/index.js）');
+    ok(instO.stdout.includes('plugin 目录即装'), 'opencode2 五门：安装输出指引（V2 目录即装无注册面）');
+    ok(!fs.existsSync(path.join(repoO, '.claude')), 'opencode2 五门：不渲染 claude 落位（宿主产物归属互斥）');
+    const oc2Src = fs.readFileSync(plugP, 'utf8');
+    ok(!oc2Src.includes('__DOMAIN_SKILLS__') && !oc2Src.includes('__SKILL_CLI__') && oc2Src.includes('java-springboot'), 'opencode2 五门：渲染占位已内联（技能映射含 java-springboot、零残留占位符）');
+    ok(oc2Src.includes('taskflow-verify') && oc2Src.includes('verification-report'), 'opencode2 验收命令：/taskflow-verify 注册进 plugin（US-OC2-03 验收清单机械化——命令面触发留实装演练）');
+    const oc2Mod = await import('file://' + plugP);
+    ok(Array.isArray(oc2Mod.GATE_MANIFEST_OPENCODE2) && oc2Mod.GATE_MANIFEST_OPENCODE2.length === 5, 'opencode2 五门：渲染副本导出门清单 5 门');
+    // 活任务夹具（J/G/B 需要有在档任务与声明清单）
+    fs.writeFileSync(path.join(tdO, 'index.json'), J({ tasks: [{ id: 't1-oc2-20260101', status: 'active', worktree: repoO }] }));
+    fs.mkdirSync(path.join(tdO, 't1-oc2-20260101'), { recursive: true });
+    fs.writeFileSync(path.join(tdO, 't1-oc2-20260101', 'task.json'), J({ id: 't1-oc2-20260101', status: 'active', worktree: repoO }));
+    fs.writeFileSync(path.join(tdO, 't1-oc2-20260101', 'spec.md'), '# Spec\n\n## 边界与影响面\n\n- **改动文件集合声明**：`src/a.ts`\n');
+    const t = oc2Mod.__test;
+    const jR = t.beforeTool({ tool: 'write', sessionID: 'ses_oc2', input: { path: path.join(tdO, 't1-oc2-20260101', 'task.json'), content: J({ id: 't1-oc2-20260101', status: 'merged' }) } }, repoO);
+    ok(!!jR && jR.includes('状态翻转墙'), 'opencode2 J 墙：手改 status 拦截（deny 文案生成，execute.before throw 前置）');
+    const jLegal = t.beforeTool({ tool: 'write', sessionID: 'ses_oc2', input: { path: path.join(tdO, 't1-oc2-20260101', 'task.json'), content: J({ id: 't1-oc2-20260101', status: 'active' }) } }, repoO);
+    ok(jLegal === null, 'opencode2 J 墙：无翻转放行（status 不变）');
+    const jB = t.beforeTool({ tool: 'shell', sessionID: 'ses_oc2', input: { command: `echo '{"id":"x","status":"merged"}' > ${path.join(tdO, 't1-oc2-20260101', 'task.json')}` } }, repoO);
+    ok(!!jB && jB.includes('状态翻转墙'), 'opencode2 J 墙：shell 重定向通道拦截');
+    const bR = t.beforeTool({ tool: 'shell', sessionID: 'ses_oc2', input: { command: 'git reset --hard HEAD~1' } }, repoO);
+    ok(!!bR && bR.includes('簿记硬拦'), 'opencode2 B 门：红线 git 拦截');
+    const bOk = t.beforeTool({ tool: 'shell', sessionID: 'ses_oc2', input: { command: 'git status --short' } }, repoO);
+    ok(bOk === null, 'opencode2 B 门：普通 git 放行');
+    const bC = t.beforeTool({ tool: 'shell', sessionID: 'ses_oc2', input: { command: 'node tf.mjs commit t1-oc2-20260101 --files a.md b.md' } }, repoO);
+    ok(!!bC && bC.includes('逗号分隔'), 'opencode2 B 门：commit --files 空格分隔拦截');
+    const gR = t.beforeTool({ tool: 'write', sessionID: 'ses_oc2', input: { path: path.join(repoO, 'src', 'other.ts'), content: 'x' } }, repoO);
+    ok(!!gR && gR.includes('编辑边界门'), 'opencode2 G 门：越界编辑 deny+引导呈报（V2 无 UI 级 ask 的等价形态）');
+    const gHit = t.beforeTool({ tool: 'write', sessionID: 'ses_oc2', input: { path: path.join(repoO, 'src', 'a.ts'), content: 'x' } }, repoO);
+    ok(gHit === null, 'opencode2 G 门：声明清单内放行');
+    const gBook = t.beforeTool({ tool: 'write', sessionID: 'ses_oc2', input: { path: path.join(tdO, 't1-oc2-20260101', 'progress.md'), content: 'x' } }, repoO);
+    ok(gBook === null, 'opencode2 G 门：簿记白名单（.taskflow/ 内）放行');
+    const hA = t.afterTool({ tool: 'write', sessionID: 'ses_oc2_h', status: 'completed', input: { path: path.join(repoO, 'Foo.java'), content: 'class Foo{}' } }, repoO);
+    ok(!!hA.append && hA.append.includes('Java') && hA.append.includes('java-springboot'), 'opencode2 H 门：.java 写入注入领域提示（含映射技能清单）');
+    const hA2 = t.afterTool({ tool: 'write', sessionID: 'ses_oc2_h', status: 'completed', input: { path: path.join(repoO, 'Bar.java'), content: 'x' } }, repoO);
+    ok(hA2.append === null, 'opencode2 H 门：同会话同领域去重（第二次静默）');
+    process.env.TF_HINT = 'off';
+    const hOff = t.afterTool({ tool: 'write', sessionID: 'ses_oc2_off', status: 'completed', input: { path: path.join(repoO, 'Baz.java'), content: 'x' } }, repoO);
+    delete process.env.TF_HINT;
+    ok(hOff.append === null, 'opencode2 H 门：TF_HINT=off 零注入');
+    const hTest = t.afterTool({ tool: 'write', sessionID: 'ses_oc2_t', status: 'completed', input: { path: path.join(repoO, 'foo.test.ts'), content: '' } }, repoO);
+    ok(!!hTest.append && hTest.append.includes('「测试」'), 'opencode2 H 门：测试文件名优先于扩展名领域');
+    const hProto = t.afterTool({ tool: 'write', sessionID: 'ses_oc2_p', status: 'completed', input: { path: 'https://example.com/a.java', content: '' } }, repoO);
+    ok(hProto.append === null, 'opencode2 H 门：协议地址零注入');
+    const hFail = t.afterTool({ tool: 'write', sessionID: 'ses_oc2_f', status: 'error', input: { path: path.join(repoO, 'Qux.java'), content: 'x' } }, repoO);
+    ok(hFail.append === null, 'opencode2 H 门：失败结果零注入（只注入 completed）');
+    // 幂等重装 + doctor 采纳对账（宿主产物归属：opencode2 项目不为缺 claude 产物红）
+    const instO2 = runO2(['mech', 'install', 'TASKFLOW_GUARD', '--yes']);
+    ok(instO2.status === 0 && /已安装|幂等/.test(instO2.stdout), 'opencode2 五门：重装幂等收敛');
+    const docO = runO2(['doctor'], repoO);
+    ok(!docO.stdout.includes('产物缺失') && docO.stdout.includes('采纳对齐：TASKFLOW_GUARD'), 'opencode2 五门：doctor 采纳对账只认本宿主产物（.opencode/plugins 归属过滤）');
+    // 呈报条款（v3.6.0 扩展到 opencode2）：new 未采纳未拒 → 指引 + opencode run 金丝雀指路
+    const repoO2 = path.join(tmp, 'repoO2');
+    fs.mkdirSync(repoO2, { recursive: true });
+    sh('git init -q -b main && git config user.email t@t.local && git config user.name t && echo ".taskflow/" >> .git/info/exclude', repoO2);
+    sh('echo x > f.txt && git add -A && git commit -qm init', repoO2);
+    fs.mkdirSync(path.join(repoO2, '.taskflow'), { recursive: true });
+    fs.writeFileSync(path.join(repoO2, '.taskflow', 'project.json'), J({ key: 'sandbox/repoO2', name: 'repoO2', repoRoot: repoO2, remote: null, git: true, createdAt: now, lastActiveAt: now }));
+    fs.writeFileSync(path.join(repoO2, '.taskflow', 'profile.json'), J({ confirm_tier: 'detailed', host: 'auto' }));
+    const runO2b = (args) => spawnSync('node', [script, ...args], { cwd: repoO2, encoding: 'utf8', env: { ...process.env, TF_HOST: 'opencode2', TF_TASKFLOW_HOME: TF_HOME_TEST } });
+    const nO = runO2b(['new', 'opencode2 呈报样例', '--tier', 'small', '--no-worktree']);
+    ok(nO.status === 0 && nO.stdout.includes('未采纳宿主防护层 TASKFLOW_GUARD') && nO.stdout.includes('opencode run'), 'opencode2 呈报：new 打印启用指引（含 opencode run 金丝雀指路）');
   }
   // N5（2026-09-27 审查 B1 教训）：渲染产物必须真跑 bash——逐行 read 块解析 bug 曾让门恒放行
   fs.writeFileSync(path.join(td2, 'decisions', '2026-01-01-somewidget.md'), '# SomeWidget 决策\n\n- 影响范围：SomeWidget.vue\n');
@@ -2920,16 +2998,20 @@ try {
     const repoRoot = path.resolve(import.meta.dirname, '..');
     const mech = run(['mechanisms'], tmp);
     const guardMod = await import('file://' + path.join(repoRoot, 'packs', 'host-adapters', 'assets', 'guard', 'taskflow-guard-claude.mjs'));
+    const oc2Mod = await import('file://' + path.join(repoRoot, 'packs', 'host-adapters', 'assets', 'guard', 'index.js'));
     const manifest = guardMod.GATE_MANIFEST_CLAUDE;
+    const manifestO2 = oc2Mod.GATE_MANIFEST_OPENCODE2;
     const mechRows = mech.stdout.split('\n').filter((l) => l.includes('｜开关：'));
     ok(mech.status === 0 && Array.isArray(manifest) && manifest.length === 5, `v3.2 T8 mechanisms：GATE_MANIFEST_CLAUDE 注册表 5 门（v3.4.0 提示门并入；实际 ${Array.isArray(manifest) ? manifest.length : '非数组'}）`);
-    ok(mechRows.length === manifest.length, `v3.2 T8 mechanisms：输出行数与 GATE_MANIFEST_CLAUDE 一致（${mechRows.length}/${manifest.length}）`);
+    ok(mech.status === 0 && Array.isArray(manifestO2) && manifestO2.length === 5, `v3.8 T8 mechanisms：GATE_MANIFEST_OPENCODE2 注册表 5 门（实际 ${Array.isArray(manifestO2) ? manifestO2.length : '非数组'}）`);
+    ok(mechRows.length === manifest.length + manifestO2.length, `v3.8 T8 mechanisms：输出行数与双宿主清单一致（${mechRows.length}/${manifest.length + manifestO2.length}）`);
+    ok(mech.stdout.includes('## claude 宿主') && mech.stdout.includes('## opencode2 宿主'), 'v3.8 T8 mechanisms：双宿主分节输出（并列报表）');
     ok(['状态翻转墙', '编辑边界门', '簿记硬拦', '压缩接力', '领域提示门', 'TF_STATUS', 'TF_BOUND', 'TF_BASH', 'TF_GUARD_LOG', 'TF_HINT'].every((k) => mech.stdout.includes(k)), 'v3.2 T8 mechanisms：claude 五门中文名与 TF_ 开关齐全');
     const gateOfRow = (l) => { const m = l.match(/gate=([^）]*)）/); return m ? m[1] : null; };
-    const gateDiff = manifest.map((m, i) => [m, gateOfRow(mechRows[i])]).filter(([m, g]) => g !== (m.gate ?? null));
-    ok(gateDiff.length === 0, `2.85.0 T8 mechanisms：逐门 gate= 与 GATE_MANIFEST 一致${gateDiff.length ? `（首异：${gateDiff[0][0].name} 输出=${gateDiff[0][1]} 期望=${gateDiff[0][0].gate}）` : ''}`);
-    const mNames = manifest.map((m) => m.name);
-    ok(new Set(mNames).size === mNames.length, 'v3.2 注册表对账：4 门 name 无重复');
+    const gateDiff = [...manifest, ...manifestO2].map((m, i) => [m, gateOfRow(mechRows[i])]).filter(([m, g]) => g !== (m.gate ?? null));
+    ok(gateDiff.length === 0, `2.85.0 T8 mechanisms：逐门 gate= 与双宿主清单一致${gateDiff.length ? `（首异：${gateDiff[0][0].name} 输出=${gateDiff[0][1]} 期望=${gateDiff[0][0].gate}）` : ''}`);
+    const mNames = manifest.map((m) => m.name); const mNamesO2 = manifestO2.map((m) => m.name);
+    ok(new Set(mNames).size === mNames.length && new Set(mNamesO2).size === mNamesO2.length, 'v3.2/v3.8 注册表对账：单宿主内门 name 无重复（跨宿主同名同义=同一机制家族的设计口径）');
     // help：注册表驱动后仍输出全部 29 命令前缀行 + 退出码行
     const hlp = run([], tmp);
     const helpCmds = ['init', 'new', 'checkpoint', 'rollback', 'confirm', 'packs', 'self-update', 'ls', 'doctor', 'reconcile', 'scout', 'skills', 'accept', 'takeover', 'park', 'unpark', 'commit', 'req-confirm', 'testplan', 'diagnose', 'nextid', 'lock', 'snapshot', 'mergegate', 'gates', 'revert-plan', 'stale', 'overlap', 'impact', 'deploy', 'migrate', 'archive', 'svc', 'hygiene', 'lint', 'mech', 'mechanisms', 'canary', 'release'];
@@ -2978,15 +3060,18 @@ try {
     // v3.0.0 宿主适配面（F14/F36）：detectHost/usagePath/planScanDirs/guardTargets/redlineFile 分支矩阵（canary 矩阵随六路径 release 一并退役——金丝雀只剩真 omp 手跑）
     const noDir = { TF_HOST: 'none' };
     ok(adapter.detectHost(noDir) === 'none' && adapter.detectHost({ TF_HOST: 'omp' }) === 'omp', 'v3 adapter detectHost：TF_HOST 强制分支（none/omp）');
-    ok(adapter.detectHost({}, () => true) !== 'none' && ['omp', 'opencode', 'claude'].includes(adapter.detectHost({ OMP: '1' }, () => false)), 'v3 adapter detectHost：env 痕迹优先于目录探测（OMP env→omp）');
-    ok(adapter.detectHost({}, (p) => p.endsWith('.config/opencode')) === 'opencode' && adapter.detectHost({}, (p) => p.endsWith('.claude')) === 'claude' && adapter.detectHost({}, () => false) === 'none', 'v3 adapter detectHost：目录痕迹探测链 opencode→claude→none');
+    ok(adapter.detectHost({}, () => true) !== 'none' && ['omp', 'opencode', 'opencode2', 'claude'].includes(adapter.detectHost({ OMP: '1' }, () => false)), 'v3 adapter detectHost：env 痕迹优先于目录探测（OMP env→omp）');
+    ok(adapter.detectHost({}, (p) => p.endsWith('.config/opencode')) === 'opencode2' && adapter.detectHost({}, (p) => p.endsWith('.claude')) === 'claude' && adapter.detectHost({}, () => false) === 'none', 'v3.8 adapter detectHost：目录痕迹探测链 opencode→opencode2（V2 主线兜底）→claude→none');
     ok(adapter.detectHost({ CLAUDECODE: '1' }, () => true) === 'claude' && adapter.detectHost({ TF_HOST: 'omp', CLAUDECODE: '1' }, () => true) === 'omp', 'v3.2 adapter detectHost：CLAUDECODE env→claude（优先于目录探测，双装机修正）；TF_HOST 强制仍最优先');
+    ok(adapter.detectHost({ OPENCODE_SESSION_ID: 'ses_x' }, () => false) === 'opencode2' && adapter.detectHost({ OPENCODE: '1' }, () => false) === 'opencode2' && adapter.detectHost({ OPENCODE: '1' }, (p) => p.endsWith('.claude')) === 'opencode2' && adapter.detectHost({ CLAUDECODE: '1', OPENCODE: '1' }, () => false) === 'claude', 'v3.8 adapter detectHost：OPENCODE/OPENCODE_SESSION_ID env→opencode2（会话级判据，优先于目录探测）；双 env 并存=嵌套调起归 claude（v3.2.0 定序语义）');
     ok(adapter.usagePath('omp') === null && adapter.usagePath('claude') === null && adapter.usagePath('none') === null, 'v3.2 adapter usagePath：omp 线迁原仓——本仓全宿主 null=不写埋点（报表口径如实声明）');
-    ok(adapter.planScanDirs('omp').length === 0 && adapter.planScanDirs('none').length === 0, 'v3.2 adapter planScanDirs：omp 线迁原仓 → []，none []');
+    ok(adapter.planScanDirs('omp').length === 0 && adapter.planScanDirs('none').length === 0 && adapter.planScanDirs('opencode2').length === 0, 'v3.2/v3.8 adapter planScanDirs：omp 线迁原仓 → []，none []，opencode2 无全局 plan 目录 []');
     ok(adapter.planScanDirs('claude').length === 1 && adapter.planScanDirs('claude')[0].endsWith('.claude/plans'), 'v3.2 adapter planScanDirs：claude 扫 ~/.claude/plans（plan mode 产物落位）');
     ok(adapter.guardTargets('omp').length === 0 && adapter.guardTargets('none').length === 0, 'v3.2 adapter guardTargets：omp 线迁原仓 → []（降级纯纪律档），none 空');
-    ok(adapter.redlineFile('opencode') === 'AGENTS.md' && adapter.redlineFile('claude') === 'CLAUDE.md' && adapter.redlineFile('none') === null, 'v3 adapter redlineFile：宿主红线载体路由');
-    ok(adapter.canaryCmdBin('omp') === null && adapter.canaryCmdBin('claude') === 'claude', 'v3.2 adapter canaryCmdBin：omp 线迁原仓 → null（静默跳过），claude 接线');
+    ok(adapter.guardTargets('claude').length === 1 && adapter.guardTargets('claude')[0].endsWith('.claude/hooks'), 'v3.2 adapter guardTargets：claude → .claude/hooks');
+    ok(adapter.guardTargets('opencode2').length === 1 && adapter.guardTargets('opencode2')[0] === '.opencode/plugins/taskflow-guard', 'v3.8 adapter guardTargets：opencode2 → .opencode/plugins/taskflow-guard（V2 plugin 目录即装）');
+    ok(adapter.redlineFile('opencode') === 'AGENTS.md' && adapter.redlineFile('opencode2') === 'AGENTS.md' && adapter.redlineFile('claude') === 'CLAUDE.md' && adapter.redlineFile('none') === null, 'v3.8 adapter redlineFile：宿主红线载体路由（opencode/opencode2→AGENTS.md，claude→CLAUDE.md）');
+    ok(adapter.canaryCmdBin('omp') === null && adapter.canaryCmdBin('claude') === 'claude' && adapter.canaryCmdBin('opencode2') === 'opencode', 'v3.8 adapter canaryCmdBin：omp null（静默跳过），claude 接线，opencode2 接 opencode run 单轮通道');
   }
   // ---- v2.88.0：项目部署形态元数据（建档初始化提问检查单 deployment 三键）锚点 ----
   {

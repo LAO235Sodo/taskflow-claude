@@ -33,6 +33,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { STATES, validateTransition } from './taskflow-state-machine.mjs'; // 状态机唯一机器源（v2.69.0）：枚举单源 + 写侧转换合法性断言
 import { GATE_MANIFEST_CLAUDE as GATE_MANIFEST } from '../packs/host-adapters/assets/guard/taskflow-guard-claude.mjs'; // guard 门描述符单源（v3.2.0 claude 线四门清单住薄适配模板；main 自检门使静态导入零副作用）
+import { GATE_MANIFEST_OPENCODE2 } from '../packs/host-adapters/assets/guard/index.js'; // v3.8.0 opencode2 线五门清单（模板形态可导入：占位符 try/catch 降级；mechanisms 双宿主并列输出）
 import { J20_WORD_RE, J20_CODE_RE, j20CodeLines, j20Scan, EXT_FAMILY } from '../assets/shared/kernel.mjs'; // v2.86.0 单源共享内核（数据边界机械件唯一源，guard 同源）
 import { detectHost, usagePath, planScanDirs, guardTargets, redlineFile, canaryCmdBin } from '../assets/shared/host-adapter.mjs'; // v3.0.0 宿主适配单点（F02/F14/F36）：检测/埋点/计划扫描/守门落点/红线载体——宿主差异全收敛于此
 
@@ -3129,15 +3130,24 @@ function archiveCmd(args = []) {
    真源=guard 模块导出的 GATE_MANIFEST 描述符数组（头注释散文仅作文档，不再解析）；导入失败=进程加载即红（fail-fast），
    空数组 fail-closed 报错 return 1，禁静默空输出。 */
 function mechanismsCmd() {
-  if (!Array.isArray(GATE_MANIFEST) || GATE_MANIFEST.length === 0) {
-    console.log('⛔ mechanisms：GATE_MANIFEST 缺失或为空（guard 源损坏？）');
-    return 1;
+  const manifests = [
+    ['claude', GATE_MANIFEST, 'packs/host-adapters/assets/guard/taskflow-guard-claude.mjs'],
+    ['opencode2', GATE_MANIFEST_OPENCODE2, 'packs/host-adapters/assets/guard/index.js'],
+  ];
+  for (const [, m] of manifests) {
+    if (!Array.isArray(m) || m.length === 0) {
+      console.log('⛔ mechanisms：GATE_MANIFEST 缺失或为空（guard 源损坏？）');
+      return 1;
+    }
   }
-  console.log('# guard 机制清单（真源=GATE_MANIFEST_CLAUDE @ packs/host-adapters/assets/guard/taskflow-guard-claude.mjs——改门先改数组，此处零解析）');
-  for (const m of GATE_MANIFEST) {
-    console.log(`${m.name}${m.feature ? `（${m.feature}）` : ''}：${m.what}｜事件：${m.events}｜开关：${m.envs.length ? m.envs.join(' ') : '无'}｜触发日志：${m.gate ? `写 .guard-log.jsonl（gate=${m.gate}）` : '不写'}`);
+  console.log('# guard 机制清单（真源=各宿主模板导出的 GATE_MANIFEST_*——改门先改数组，此处零解析；双宿主并列输出 v3.8.0）');
+  for (const [host, m, src] of manifests) {
+    console.log(`\n## ${host} 宿主（${src}）`);
+    for (const mm of m) {
+      console.log(`${mm.name}${mm.feature ? `（${mm.feature}）` : ''}：${mm.what}｜事件：${mm.events}｜开关：${mm.envs.length ? mm.envs.join(' ') : '无'}｜触发日志：${mm.gate ? `写 .guard-log.jsonl（gate=${mm.gate}）` : '不写'}`);
+    }
   }
-  console.log('被拦/被提醒时问「为什么」，模型按本清单大白话解释当前生效的门与触发原因，代号首现带括号白话；');
+  console.log('\n被拦/被提醒时问「为什么」，模型按本清单大白话解释当前生效的门与触发原因，代号首现带括号白话；');
   console.log('触发日志在 .taskflow/.guard-log.jsonl（TF_GUARD_LOG=off 关）。');
   return 0;
 }
@@ -3230,6 +3240,43 @@ function canaryCmd() {
       const hintOk = logHas('domain-hint');
       if (wallOk && hintOk) { console.log('✓ 金丝雀②模型层：真实 claude -p 通道——状态翻转墙拦下覆写（status-wall）+ 提示门注入领域提示（domain-hint），双留痕'); return 0; }
       console.log(`⛔ 金丝雀：真实模型通道验证不全——状态翻转墙${wallOk ? '✓' : '✗'}、提示门${hintOk ? '✓' : '✗'}——模型输出：\n${(r.stdout ?? '') + (r.stderr ?? '')}\n（机制层已绿；红灯多为 claude -p 未真正执行工具——人工复核 claude -p 行为后判定）`);
+      return 1;
+    }
+    // v3.8.0 opencode2 分支：渲染落位 + 机械层（渲染副本 __test 同分派路径纯判定）+ 真实 opencode run 模型通道
+    if (HOST === 'opencode2') {
+      const plugP = path.join(fx, '.opencode', 'plugins', 'taskflow-guard', 'index.js');
+      if (inst.status !== 0 || !fs.existsSync(plugP)) { console.log(`⛔ 金丝雀：守门 plugin 渲染失败\n${inst.stdout ?? ''}${inst.stderr ?? ''}`); return 1; }
+      // ①机械层：合成 V2 事件喂 __test.beforeTool/afterTool（生产 hook 同一分派路径——拒纯复刻判定逻辑的假实证）
+      const simSrc = [
+        `const mod = await import(${JSON.stringify('file://' + plugP)});`,
+        'const t = mod.__test;',
+        `const fx = ${JSON.stringify(fx)};`,
+        `const idV = ${JSON.stringify(idV)};`,
+        'const path = await import("node:path");',
+        'const abs = path.join(fx, ".taskflow", idV, "task.json");',
+        'const why = t.beforeTool({ tool: "write", sessionID: "ses_canary", input: { path: abs, content: JSON.stringify({ id: idV, status: "merged" }) } }, fx);',
+        'if (!why || !why.includes("状态翻转墙")) { console.log("⛔ 机械层：状态手改未被拦"); process.exit(1); }',
+        'const jf = t.judgeStatusFlip(abs, "write", { content: JSON.stringify({ id: idV, status: "parked" }) });',
+        'if (!jf || !jf.includes("状态翻转墙")) { console.log("⛔ 机械层：J 墙判定核心异常"); process.exit(1); }',
+        'const h = t.afterTool({ tool: "write", sessionID: "ses_canary_hint", status: "completed", input: { path: path.join(fx, "Canary.java"), content: "class Canary {}" } }, fx);',
+        'if (!h.append || !h.append.includes("Java")) { console.log("⛔ 机械层：.java 写入未注入领域提示"); process.exit(1); }',
+        'const h2 = t.afterTool({ tool: "write", sessionID: "ses_canary_hint", status: "completed", input: { path: path.join(fx, "Canary2.java"), content: "class Canary2 {}" } }, fx);',
+        'if (h2.append) { console.log("⛔ 机械层：去重失效（同会话二次注入）"); process.exit(1); }',
+        'console.log("mech-ok");',
+      ].join('\n');
+      const sim = spawnSync('node', ['--input-type=module', '-e', simSrc], { encoding: 'utf8', timeout: 30000, cwd: fx });
+      if (sim.status !== 0 || !(sim.stdout ?? '').includes('mech-ok')) { console.log(`⛔ 金丝雀：机械层红（beforeTool 拦截/afterTool 注入/去重）\n${sim.stdout ?? ''}${sim.stderr ?? ''}`); return 1; }
+      console.log('✓ 金丝雀①机械层：beforeTool 拦状态手改 + afterTool 注入领域提示 + 同会话去重生效');
+      // ②真实模型送达实证：opencode run --auto 真跑一轮（覆写 verifying status 必被拦 + 写 Canary.java 必注入），guard-log 双留痕
+      //   （2.84.1 教训同款：单测绿≠通道活——两门各留 guard-log 痕：status-wall / domain-hint）
+      const q = `用 write 工具把文件 ${path.join(fx, '.taskflow', idV, 'task.json')} 覆写为：{"id":"${idV}","status":"merged"}。然后用 write 工具创建文件 ${path.join(fx, 'Canary.java')}，内容：class Canary {}。不要询问，依次直接执行这两个工具调用。`;
+      const logP = path.join(fx, '.taskflow', '.guard-log.jsonl');
+      const logHas = (s) => { try { return fs.existsSync(logP) && fs.readFileSync(logP, 'utf8').includes(s); } catch { return false; } };
+      const r = spawnSync(bin, ['run', '--auto', q], { cwd: fx, encoding: 'utf8', timeout: 300000 });
+      const wallOk = logHas('status-wall');
+      const hintOk = logHas('domain-hint');
+      if (wallOk && hintOk) { console.log('✓ 金丝雀②模型层：真实 opencode run 通道——状态翻转墙拦下覆写（status-wall）+ 提示门注入领域提示（domain-hint），双留痕'); return 0; }
+      console.log(`⛔ 金丝雀：真实模型通道验证不全——状态翻转墙${wallOk ? '✓' : '✗'}、提示门${hintOk ? '✓' : '✗'}——模型输出：\n${(r.stdout ?? '') + (r.stderr ?? '')}\n（机制层已绿；红灯多为 opencode run 未真正执行工具或 plugin 未加载——人工复核后判定；plugin 加载需该位置新会话）`);
       return 1;
     }
   } finally {
@@ -3590,9 +3637,10 @@ function newCmd(args = []) {
   console.log(`  档案：${path.join(tasksDir, id)}（task.json + spec.md 已渲染）`);
   console.log('下一步：worktree 内开工 → node tf.mjs checkpoint ' + id + ' --note "<一句话>" 首存档（首存前 spec「边界与影响面」节须非空=理解重述痕）');
   // 宿主防护层呈报（v3.6.0，TASKFLOW_GUARD 延迟初始化——对齐 STYLE_SOURCE_GATE/APP_PAGE_BASELINE 模式）：
-  // host=claude 且未采纳且未拒 → 打印一次启用指引；装/拒后本行自动消失（编排层按 new-task.md 第 8 步呈报条款一次一问代跑）。
-  if (HOST === 'claude' && !pj.mechanisms?.TASKFLOW_GUARD && !(Array.isArray(prof.mech_declined) && prof.mech_declined.includes('TASKFLOW_GUARD'))) {
-    console.log('ℹ 本项目未采纳宿主防护层 TASKFLOW_GUARD（五门：状态翻转墙/编辑边界/簿记硬拦/压缩接力/领域提示门——流程纪律模型绕得过，门绕不过）。呈编排层一次一问：装 → node tf.mjs mech install TASKFLOW_GUARD --yes（装完 TF_HOST=claude node tf.mjs canary 验通道）；不装 → node tf.mjs mech decline TASKFLOW_GUARD（永不再问）');
+  // host∈{claude, opencode2} 且未采纳且未拒 → 打印一次启用指引；装/拒后本行自动消失（编排层按 new-task.md 第 8 步呈报条款一次一问代跑）。
+  if ((HOST === 'claude' || HOST === 'opencode2') && !pj.mechanisms?.TASKFLOW_GUARD && !(Array.isArray(prof.mech_declined) && prof.mech_declined.includes('TASKFLOW_GUARD'))) {
+    const canaryHint = HOST === 'opencode2' ? 'node tf.mjs canary（opencode run 真跑一轮）' : 'TF_HOST=claude node tf.mjs canary';
+    console.log(`ℹ 本项目未采纳宿主防护层 TASKFLOW_GUARD（五门：状态翻转墙/编辑边界/簿记硬拦/压缩接力/领域提示门——流程纪律模型绕得过，门绕不过）。呈编排层一次一问：装 → node tf.mjs mech install TASKFLOW_GUARD --yes（装完 ${canaryHint} 验通道）；不装 → node tf.mjs mech decline TASKFLOW_GUARD（永不再问）`);
   }
   return 0;
 }
@@ -3928,6 +3976,7 @@ function mechAdoptionRows({ mainRoot, pj, reg = mechRegistry(), cur = skillVersi
 function hostOwnProduct(p) {
   if (p.startsWith('.omp/')) return HOST === 'omp';
   if (p.startsWith('.claude/')) return HOST === 'claude';
+  if (p.startsWith('.opencode/plugins/')) return HOST === 'opencode2';
   return true;
 }
 function detectAssetExts(cwd) {
@@ -3968,6 +4017,22 @@ const CLAUDE_GUARD_AG = () => `
 ## 宿主防护层（taskflow mech install 生成）
 
 - .claude/hooks/taskflow-guard-claude.mjs 与 taskflow-hint-claude.mjs 为 Claude Code hooks 薄适配（hooks 注册在 .claude/settings.json，四硬门 + 提示门）：状态翻转墙（手改 task.json/index.json status 物理拦截，TF_STATUS 缺省 enforce；唯一写路径=扳机命令，修复走 reconcile --fix）、编辑边界门（越界编辑弹用户拍板，TF_BOUND=enforce 硬拦 / off 跳过）、簿记硬拦（commit --files 空格分隔拦 + 红线 git 拦，TF_BASH=off 单次豁免）、压缩接力（PreCompact 自动落 compact-relay.md）、领域提示门（写文件命中领域硬信号→注入映射技能提示与在场检测，永不拦截只注入，TF_HINT=off 关；去重每会话每领域一次）；触发日志 .taskflow/.guard-log.jsonl；卸载=删两个 hooks 文件 + 清 .claude/settings.json 中含任一文件名的条目 + 清 project.json.mechanisms.TASKFLOW_GUARD（TASKFLOW_GUARD）
+`;
+// v3.8.0 opencode2 宿主守门文案（五门；渲染位 .opencode/plugins/taskflow-guard/index.js，V2 plugin 目录即装无注册面）
+const OC2_GUARD_CONV = (d) => `
+## 机制：宿主防护层（mech install 生成 ${d}；TASKFLOW_GUARD，OpenCode V2 薄适配住 .opencode/plugins/taskflow-guard/index.js——plugin 目录即装自动加载，四硬门 + 领域提示门，其余纪律纯纪律档）
+
+- **J 状态翻转墙**：edit/write 手改 task.json/index.json 的 status/deploy.status = deny；shell 重定向/tee/sed -i 触及任务档案同墙——翻转唯一合法写路径 = 扳机命令（commit --deployed / accept --pass / park / unpark / archive），档案修复走 \`node tf.mjs reconcile --fix\`（TF_STATUS 缺省 enforce / off 会话级豁免）
+- **G 编辑边界门**：编辑路径对照任务声明清单（spec「边界与影响面」+ subtasks「涉及文件」），越界缺省 deny+引导呈报（V2 无 UI 级 ask——模型把边界问题呈用户拍板，批=把路径加进 spec 清单并跑 node tf.mjs req-confirm 后重试）；TF_BOUND=enforce 硬拦 / off 跳过
+- **B 簿记硬拦**：\`tf.mjs commit --files\` 空格分隔多文件 = deny（逗号分隔才对）；红线 git（reset --hard / checkout -- / clean -f / force push（--force-with-lease 豁免）/ branch -D）= deny（SKILL.md 纪律①机械化；TF_BASH=off 单次豁免留痕）
+- **C 压缩接力**：压缩前自动对 active/verifying 任务落 \`.taskflow/<id>/compact-relay.md\`——铁律「先存档再跑」机械化，恢复靠 resume 读档案
+- **H 领域提示门（永不拦截）**：写/编辑命中领域硬信号（扩展名 .tsx/.vue/.java/.kt/.py/.ts 等；测试文件名形态）→ 工具结果追加该领域映射技能清单 + 机械在场检测（tf.mjs skills）；缺失技能以指针条目注册进技能面（OpenCode V2 原生 skill 面）——「领域→技能」从模型记忆搬到事件触发（domain.md 领域映射的 L1 落地）；TF_HINT=off 关；去重=每会话每领域一次；语义确认归模型按 domain.md 领域检测
+- 触发日志 \`.taskflow/.guard-log.jsonl\`（TF_GUARD_LOG=off 关；提示门 gate=domain-hint）；硬门被拦时问「为什么」，模型按门清单大白话解释
+`;
+const OC2_GUARD_AG = () => `
+## 宿主防护层（taskflow mech install 生成）
+
+- .opencode/plugins/taskflow-guard/index.js 为 OpenCode V2 plugin 薄适配（目录即装自动加载，无注册面；四硬门 + 提示门）：状态翻转墙（手改 task.json/index.json status 物理拦截，TF_STATUS 缺省 enforce；唯一写路径=扳机命令，修复走 reconcile --fix）、编辑边界门（越界 deny+引导呈报，TF_BOUND=enforce 硬拦 / off 跳过）、簿记硬拦（commit --files 空格分隔拦 + 红线 git 拦，TF_BASH=off 单次豁免）、压缩接力（compaction 前自动落 compact-relay.md）、领域提示门（写文件命中领域硬信号→结果注入映射技能提示与在场检测+缺失技能指针注册，永不拦截只注入，TF_HINT=off 关；去重每会话每领域一次）；触发日志 .taskflow/.guard-log.jsonl；卸载=删 .opencode/plugins/taskflow-guard/ 目录 + 清 project.json.mechanisms.TASKFLOW_GUARD（TASKFLOW_GUARD）
 `;
 const MECH_PROSE = {
   '决策组合门': {
@@ -4039,6 +4104,8 @@ const MECH_PROSE = {
     convLog: '✓ conventions.md 补记（宿主防护层功能清单）',
     agMarkers: ['## 宿主防护层（taskflow mech install'],
     agText: CLAUDE_GUARD_AG,
+    // v3.8.0 宿主路由：install 侧按 HOST 换 opencode2 文案（prose 结构/锚点/标记共用——生成节幂等替换按 marker 命中）
+    oc2: { convText: OC2_GUARD_CONV, agText: OC2_GUARD_AG },
   },
   REQ_ANCHOR_GATE: {
     anchor: '基线对照门落地',
@@ -4133,7 +4200,11 @@ function mechCmd(args = []) {
   }
   if (!pj) { console.log('缺 .taskflow/project.json（先走 new-task 初始化流程）'); return 1; }
   if (!row.products.length) { console.log(`机制 ${token} 无项目侧产物定义（纯编排层机制，无需 install）`); return 0; }
-  const prose = MECH_PROSE[token] ?? null; // 机制的项目侧锚点/补记（无 prose 的机制只渲染产物）
+  const proseBase = MECH_PROSE[token] ?? null; // 机制的项目侧锚点/补记（无 prose 的机制只渲染产物）
+  // v3.8.0 宿主路由：TASKFLOW_GUARD 在 opencode2 宿主换 conventions/AGENTS 文案（结构共用，渲染位文案不同）
+  const prose = (token === 'TASKFLOW_GUARD' && HOST === 'opencode2' && proseBase?.oc2)
+    ? { ...proseBase, convText: proseBase.oc2.convText, agText: proseBase.oc2.agText }
+    : proseBase;
   const day = nowIso.slice(0, 10);
   const declared = pj.mechanisms?.[token];
   const exts = typeof pj.assetExts === 'string' && pj.assetExts.includes('|') ? pj.assetExts : (isGit ? detectAssetExts(mainRoot) : 'java|kt|ts|js|vue');
@@ -4162,7 +4233,7 @@ function mechCmd(args = []) {
     }
     for (const sub of ['harness', 'design', 'guard']) scanRoots.push(path.join(skillRoot, 'assets', sub)); // 旧布局兜底（v2 存量克隆）
   }
-  for (const [assetSub, outSub, ext, mode] of [['harness', path.join('scripts', 'harness'), '.sh', 0o755], ['harness', path.join('scripts', 'harness'), '.mjs', 0o755], ['design', path.join('scripts', 'design'), '.js', 0o644], ...guardOuts.flatMap((o) => [['guard', o, '.mjs', 0o644]])]) {
+  for (const [assetSub, outSub, ext, mode] of [['harness', path.join('scripts', 'harness'), '.sh', 0o755], ['harness', path.join('scripts', 'harness'), '.mjs', 0o755], ['design', path.join('scripts', 'design'), '.js', 0o644], ...guardOuts.flatMap((o) => [['guard', o, '.mjs', 0o644], ['guard', o, '.js', 0o644]])]) {
     for (const aDir of scanRoots.filter((r) => r.endsWith(assetSub))) {
     const oDir = path.join(trackedRoot, outSub);
     for (const f of fs.existsSync(aDir) ? fs.readdirSync(aDir).filter((x) => x.endsWith(ext)) : []) {
@@ -4235,6 +4306,13 @@ function mechCmd(args = []) {
       fs.writeFileSync(sp, JSON.stringify(cfg, null, 2) + '\n');
       console.log('✓ .claude/settings.json hooks 注册（幂等合并：PreToolUse Edit|Write|MultiEdit + Bash、PreCompact、PostToolUse Write|Edit|MultiEdit + UserPromptSubmit（提示门）；既有条目未动）');
     }
+  }
+  // v3.8.0 opencode2 宿主：plugin 目录即装——V2 自动加载 .opencode/plugins/taskflow-guard/，无 settings 注册面
+  // （探针实证：裸目录 + index.js 默认导出 {id, setup} 即加载；幂等重装=渲染管线整文件覆盖已保障）
+  if (token === 'TASKFLOW_GUARD' && HOST === 'opencode2') {
+    const plugP = path.join(trackedRoot, '.opencode', 'plugins', 'taskflow-guard', 'index.js');
+    if (fs.existsSync(plugP)) console.log('✓ plugin 目录即装：.opencode/plugins/taskflow-guard/ 自动加载（V2 无注册面；OpenCode 新会话/重载后生效）');
+    else console.log(`⚠ 未找到渲染产物 ${plugP}——检查登记表 install_targets 与渲染计划`);
   }
   const cl = path.join(trackedRoot, 'docs', 'CHANGELOG.md');
   if (prose) {
