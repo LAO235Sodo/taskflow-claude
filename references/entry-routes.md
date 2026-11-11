@@ -97,6 +97,6 @@
 | 三层路径盘点 | briefing | 不可行宣称/绕过诉求 | packs/briefing/PACK.md | 呈报纪律 |
 | 合规哲学 | briefing | 合规标注/路径否决 | packs/briefing/PACK.md | 呈报纪律 |
 | CARRIER_SKILLS | carrier | 范围评估/影响面/数据边界/冲突分级/页面取证 | packs/carrier/PACK.md | `packs install carrier --all`；`skills <领域词|别名>` 检测 |
-| TASKFLOW_GUARD | host-adapters | 守门/guard/宿主扩展 | packs/host-adapters/PACK.md | `mech install TASKFLOW_GUARD`（claude 宿主；其余降级纯纪律档） |
+| TASKFLOW_GUARD | host-adapters | 守门/guard/宿主扩展 | packs/host-adapters/PACK.md | `mech install TASKFLOW_GUARD`（claude + opencode2 双宿主；其余降级纯纪律档） |
 
 > 包清单与启用态：`node <skill目录>/scripts/tf.mjs packs list`；profile 拍板：`tf.mjs init --packs <a,b>`；机制机器注册表：references/schemas/mechanisms.json（`node scripts/gen-mechanisms.mjs` 再生成，doctor I20 对账）。

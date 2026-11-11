@@ -1,6 +1,6 @@
 {
   "token": "TASKFLOW_GUARD",
-  "name": "宿主防护层（claude 五门薄适配：四硬门 + 领域提示门）",
+  "name": "宿主防护层（五门薄适配：claude + opencode2 双宿主）",
   "triggers": [
     "守门",
     "guard",
@@ -10,11 +10,13 @@
   ],
   "assets": [
     "assets/guard/taskflow-guard-claude.mjs",
-    "assets/guard/taskflow-hint-claude.mjs"
+    "assets/guard/taskflow-hint-claude.mjs",
+    "assets/guard/index.js"
   ],
   "install_targets": {
     ".claude/hooks/taskflow-guard-claude.mjs": "assets/guard/taskflow-guard-claude.mjs",
-    ".claude/hooks/taskflow-hint-claude.mjs": "assets/guard/taskflow-hint-claude.mjs"
+    ".claude/hooks/taskflow-hint-claude.mjs": "assets/guard/taskflow-hint-claude.mjs",
+    ".opencode/plugins/taskflow-guard/index.js": "assets/guard/index.js"
   },
   "docs": "PACK.md",
   "fixtures": [
@@ -26,5 +28,5 @@
     "references/domain.md",
     "references/new-task.md"
   ],
-  "plain": "宿主层的防护栏与提示灯：拦危险命令与状态手改、编辑越界弹人拍板、压缩会话时自动落接力快照，写文件命中领域硬信号时自动注入该领域映射技能提示与在场检测（claude 宿主五门——提示门永不拦截只注入；其余宿主降级纯纪律档；omp 线住原仓 taskflow）"
+  "plain": "宿主层的防护栏与提示灯：拦危险命令与状态手改、编辑越界弹人拍板、压缩会话时自动落接力快照，写文件命中领域硬信号时自动注入该领域映射技能提示与在场检测（claude 与 opencode2 双宿主五门——提示门永不拦截只注入；其余宿主降级纯纪律档；omp 线住原仓 taskflow）"
 }

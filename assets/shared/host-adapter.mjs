@@ -36,13 +36,18 @@ const homeJoin = (...seg) => (HOME ? [HOME, ...seg].join('/') : '');
 // 宿主探测：env 优先（TF_HOST 强制/测试注入），再按痕迹探测；无命中='none'（纯纪律档降级）。
 // CLAUDECODE 判据（v3.2.0）：Claude Code 会话内 Bash 恒带该 env——宿主=调起 taskflow 的会话，
 // 须排在目录探测之前，否则双装机（~/.config/opencode 在场）claude 永不自动命中。
+// OPENCODE 判据（v3.8.0 opencode2 线）：OpenCode V2 会话 Bash 恒带 OPENCODE=1 + OPENCODE_SESSION_ID=ses_…
+// （2026-11-11 v2.2.7 会话实证）——同样会话级判据，排在 CLAUDECODE 之后（双 env 并存=嵌套调起场景归 claude，
+// 与 v3.2.0 定序语义一致）、目录探测之前。
 // 注：omp 线已迁回原仓 LAO235Sodo/taskflow（v3.2.0 分仓）——本仓 omp 强制值仍被接受但按纪律档处理（适配全 null）。
 export function detectHost(env = (typeof process !== 'undefined' ? process.env : {}), exists = () => false) {
   const forced = env.TF_HOST;
-  if (forced && ['omp', 'opencode', 'claude', 'none'].includes(forced)) return forced;
+  if (forced && ['omp', 'opencode', 'opencode2', 'claude', 'none'].includes(forced)) return forced;
   if (env.OMP || env.OMP_SESSION_ID) return 'omp';
   if (env.CLAUDECODE) return 'claude';
-  if (exists(homeJoin('.config', 'opencode'))) return 'opencode';
+  if (env.OPENCODE_SESSION_ID || env.OPENCODE) return 'opencode2';
+  // 目录兜底归 opencode2（v3.8.0 拍板：~/.config/opencode 同时服务 V1/V2，V2 已是主线；V1 用户 TF_HOST=opencode 逃生）
+  if (exists(homeJoin('.config', 'opencode'))) return 'opencode2';
   if (exists(homeJoin('.claude'))) return 'claude';
   return 'none';
 }
@@ -51,23 +56,30 @@ export function usagePath(_host) {
   return null;
 }
 // 计划交接文档扫描目录（ls 游离工作源）：claude=~/.claude/plans（Claude Code plan mode 产物落位）；其余 []。
+// opencode2：V2 无全局 plan 目录（plan mode 是 agent，工作记录在会话存储——2026-11-11 探明），如实 []。
 export function planScanDirs(host) {
   return host === 'claude' ? [homeJoin('.claude', 'plans')] : [];
 }
-// 守门扩展落盘目标（mech install TASKFLOW_GUARD 渲染位）：claude=.claude/hooks（四门薄适配，配 .claude/settings.json
-// hooks 注册）；其余 []=宿主无守门通道（降级纯纪律档；omp 守门在原仓）。
+// 守门扩展落盘目标（mech install TASKFLOW_GUARD 渲染位）：claude=.claude/hooks（两模板 .mjs，配 settings.json
+// hooks 注册）；opencode2=.opencode/plugins/taskflow-guard（V2 plugin 目录即装，模板 index.js——探针实证裸目录
+// 自动加载、无注册面）；其余 []=宿主无守门通道（降级纯纪律档；omp 守门在原仓）。
 export function guardTargets(host) {
-  return host === 'claude' ? [pathJoin('.claude', 'hooks')] : [];
+  if (host === 'claude') return [pathJoin('.claude', 'hooks')];
+  if (host === 'opencode2') return [pathJoin('.opencode', 'plugins', 'taskflow-guard')];
+  return [];
 }
-// 红线摘要载体（new-task/记录约定写红线处）：opencode=AGENTS.md / claude=CLAUDE.md / 其余仅 conventions.md。
+// 红线摘要载体（new-task/记录约定写红线处）：opencode/opencode2=AGENTS.md（V2 同样每会话自动注入）/
+// claude=CLAUDE.md / 其余仅 conventions.md。
 export function redlineFile(host) {
-  if (host === 'opencode') return 'AGENTS.md';
+  if (host === 'opencode' || host === 'opencode2') return 'AGENTS.md';
   if (host === 'claude') return 'CLAUDE.md';
   return null;
 }
-// 金丝雀通道（canary 命令）：claude 有 -p 单轮通道；其余 null=静默跳过（omp 金丝雀在原仓）。
+// 金丝雀通道（canary 命令）：claude 有 -p 单轮通道；opencode2 有 opencode run 单轮通道（--auto 放行权限，
+// v3.8.0）；其余 null=静默跳过（omp 金丝雀在原仓）。
 export function canaryCmdBin(host) {
-  return host === 'claude' ? 'claude' : null;
+  if (host === 'claude') return 'claude';
+  if (host === 'opencode2') return 'opencode';
   return null;
 }
 const pathJoin = (...seg) => seg.join('/');
