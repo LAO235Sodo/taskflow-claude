@@ -616,6 +616,7 @@ const INVARIANTS = [
   { id: 'I19', desc: 'conventions 完备性：文件存在 + 必备小节（确认档位/推送与部署/验证清单/完成定义/禁止事项）齐 + 档位值 ∈ {detailed,batch}（v3.0.0，缺=红）' },
   { id: 'I20', desc: '包完整性：packs/*/manifest.json 可解析 + 核心引用的 token 都有对应包 + mechanisms.json 与 manifest 一致（v3.0.0）' },
   { id: 'I21', desc: '（提示级）遗留敞口：verifying ∧ 无 deploy 记录 ∧ lastActiveAt 超 3 天 → ℹ 呈报行（不红，进 ls 摘要；v3.0.0，F30）' },
+  { id: 'I22', desc: '（提示级，v3.8.0/J06）STUCK 候选：active/verifying 任务 checkpoints≥3 且阻塞信号（checkpoints.summary + findings.md）≥3 处 → 黄牌——数据探针只报警，STUCK 判定归编排层（merge.md::STUCK）' },
 ];
 
 /* ---------------- doctor --self：spec↔注册表↔实现 三源一致性 ----------------
@@ -857,6 +858,21 @@ function doctor(args = []) {
     if (t.deploy?.deployedAt || t.deploy?.status === 'verifying') continue;
     const days = (Date.now() - Date.parse(t.lastActiveAt ?? 0)) / 86400000;
     if (Number.isFinite(days) && days > 3) console.log(`ℹ 遗留敞口（I21） ${t.id} verifying 无 deploy 记录且 ${Math.floor(days)} 天未活跃——确认部署状态（commit --deployed / deploy --record）或 req-confirm 校准口径`);
+  }
+
+  // I22（提示级，v3.8.0/J06）：STUCK 候选探针——active/verifying 任务 checkpoints≥3 且阻塞信号
+  //（checkpoints.summary + findings.md 计数「阻塞/blocked」）≥3 处 → 黄牌。数据探针只报警不改行为，
+  // STUCK 判定与处置（revert/另立任务）归编排层——表二 J06 散文纪律的机械化对账面。
+  for (const t of allTasks) {
+    if (t.status !== 'active' && t.status !== 'verifying') continue;
+    const cps = t.checkpoints ?? [];
+    if (cps.length < 3) continue;
+    const blockerHits = cps.filter((c) => /阻塞|blocked/i.test(c.summary ?? '')).length;
+    let findingsBlocks = 0;
+    try { findingsBlocks = (fs.readFileSync(taskDirOf(tasksDir, t.id) + path.sep + 'findings.md', 'utf8').match(/阻塞|blocked/gi) ?? []).length; } catch {}
+    if (blockerHits + findingsBlocks >= 3) {
+      console.log(`⚠ STUCK 候选（I22） ${t.id} checkpoints ${cps.length} 笔且阻塞信号 ${blockerHits + findingsBlocks} 处——疑似同一阻塞打转（J06：同一阻塞 3 次/连续 3 轮新阻塞），判定与处置归编排层（merge.md::STUCK：revert 或另立任务）`);
+    }
   }
 
   // 复发台账报表（v3.0.0/F27）：.taskflow/meta/recurrence.json 每类事故最近复发时间；台账不存在=静默。
@@ -1615,6 +1631,21 @@ function acceptanceLedgerGate(tasksDir, t) {
   }
   return true;
 }
+// v3.8.0 验证报告门（J32 半机械）：spec 含「影响面地图」的任务，accept --pass 时核对 verification-report.md 已落——
+// 治「验证报告靠模型自觉落盘」（同验收清单门失灵模式）。向后兼容两级：spec 无影响面地图=未启用静默放行；
+// 2026-11-11 前建档的存量任务降级提示级（不拦截）。口径出处 testing.md「影响面→验证转化」。
+function verificationReportGate(tasksDir, t) {
+  let spec = '';
+  try { spec = fs.readFileSync(taskDirOf(tasksDir, t.id) + path.sep + 'spec.md', 'utf8'); } catch { return true; }
+  if (!spec.includes('影响面地图')) return true;
+  if (fs.existsSync(taskDirOf(tasksDir, t.id) + path.sep + 'verification-report.md')) return true;
+  if (t.createdAt && t.createdAt < '2026-11-11') {
+    console.log(`ℹ ${t.id} spec 含影响面地图但验证报告未落（verification-report.md 缺）——存量任务提示级放行，v3.8.0 起新建档任务将拦截（J32）`);
+    return true;
+  }
+  console.log(`⛔ ${t.id} 影响面地图在档但验证报告未落（.taskflow/${t.id}/verification-report.md 缺）——按 templates/verification-report.md 落报告（影响面地图每个下游消费方一行：实测证据或「未覆盖——原因」），再重跑 accept --pass；口径出处 testing.md「影响面→验证转化」（J32）`);
+  return false;
+}
 
 /* ---------------- accept --pass：验收翻转（*→merged 的唯一写路径） ----------------
    状态机行见 data.md「状态机」；治「状态转换靠自觉」的合并侧补全（--deployed 治部署侧）。
@@ -1644,6 +1675,7 @@ function acceptPass(tasksDir, t) {
     return 1;
   }
   if (!acceptanceLedgerGate(tasksDir, t)) return 1; // v3.8.0 验收清单滚动门：清单轮次落后终版 = 拦截
+  if (!verificationReportGate(tasksDir, t)) return 1; // v3.8.0 验证报告门（J32）：影响面地图在档而报告未落 = 拦截
   const p = path.join(tasksDir, t.id, 'task.json');
   const j = readJson(p);
   if (!j) { console.log('⚠ task.json 损坏 → 翻转中止（先修复档案）'); return 1; }
