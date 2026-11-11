@@ -4527,7 +4527,7 @@ function hygieneCmd(args = []) {
 
 function lintCmd(args = []) {
   const rootOverride = args.includes('--root') ? path.resolve(String(args[args.indexOf('--root') + 1] ?? '')) : null;
-  const root = rootOverride ? path.join(rootOverride, 'scripts') : path.dirname(new URL(import.meta.url).pathname); // root 恒为 <repo>/scripts，读文档走 join(root,'..')
+  const root = rootOverride ? path.join(rootOverride, 'scripts') : path.dirname(fileURLToPath(import.meta.url)); // root 恒为 <repo>/scripts，读文档走 join(root,'..')（v3.8.0 修：URL.pathname 裸拼在 Windows 叠双盘符 C:\C:\，lint 自上线起在 win32 不可用）
   const refs = fs.readdirSync(path.join(root, '..', 'references')).filter((f) => f.endsWith('.md')).map((f) => `references/${f}`);
   const files = ['SKILL.md', 'README.md', ...refs];
   let bad = 0;
