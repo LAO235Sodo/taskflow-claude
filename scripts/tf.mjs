@@ -1588,6 +1588,34 @@ function accept(idArg, args = []) {
   return 0;
 }
 
+/* ---------------- 验收清单滚动门（v3.8.0，feat：轮次回填机械化） ----------------
+   治「验收反馈只进 checkpoint 日志不回填 spec 清单」（D领域规划文档任务八轮迭代复盘，2026-11-11）：
+   spec 验收标准节启用轮次标注（条目带（轮次：vN））的任务，accept --pass 时机械核对
+   「清单最新轮次 ≥ spec 终版轮次」——清单落后终版 = 终版前有反馈未回填，拦截。
+   未启用（无轮次标注）静默放行——向后兼容存量任务；终版标注缺失提示但放行（机制半启用不硬拦）。 */
+function versionCmp(a, b) {
+  const pa = a.split('.').map(Number), pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d; }
+  return 0;
+}
+function acceptanceLedgerGate(tasksDir, t) {
+  let spec = '';
+  try { spec = fs.readFileSync(taskDirOf(tasksDir, t.id) + path.sep + 'spec.md', 'utf8'); } catch { return true; }
+  const rounds = [...spec.matchAll(/[（(]轮次：v(\d+(?:\.\d+)?)/g)].map((m) => m[1]);
+  if (!rounds.length) return true;
+  const maxRound = rounds.reduce((m, x) => (versionCmp(x, m) > 0 ? x : m));
+  const finalM = spec.match(/(?:终版|定格)\s*v(\d+(?:\.\d+)?)/);
+  if (!finalM) {
+    console.log(`ℹ ${t.id} 验收清单已启用轮次标注（最新 v${maxRound}），spec 无终版标注（「终版 vN」/「定格 vN」）——轮次核对跳过，补标注后此门即生效`);
+    return true;
+  }
+  if (versionCmp(maxRound, finalM[1]) < 0) {
+    console.log(`⛔ ${t.id} 验收清单未跟上终版：清单最新轮次 v${maxRound} < 终版 v${finalM[1]}——终版前有验收反馈未回填 spec 验收标准节（条目须带（轮次：vN）标注）。回填后重跑 accept --pass；口径出处 conventions「验收清单滚动更新」节`);
+    return false;
+  }
+  return true;
+}
+
 /* ---------------- accept --pass：验收翻转（*→merged 的唯一写路径） ----------------
    状态机行见 data.md「状态机」；治「状态转换靠自觉」的合并侧补全（--deployed 治部署侧）。
    前置=任务分支已并入主分支（merged 语义=已合并+验收通过；verify-first 必须先合并再翻转，脚本强制）。 */
@@ -1615,6 +1643,7 @@ function acceptPass(tasksDir, t) {
     console.log(`⛔ ${t.id} 无确认回执（.taskflow/${t.id}/confirmations.jsonl 空/缺）——先落用户确认原话：node tf.mjs confirm ${t.id} --note "<用户确认原话>"，再 accept --pass`);
     return 1;
   }
+  if (!acceptanceLedgerGate(tasksDir, t)) return 1; // v3.8.0 验收清单滚动门：清单轮次落后终版 = 拦截
   const p = path.join(tasksDir, t.id, 'task.json');
   const j = readJson(p);
   if (!j) { console.log('⚠ task.json 损坏 → 翻转中止（先修复档案）'); return 1; }
