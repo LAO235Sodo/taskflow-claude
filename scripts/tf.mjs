@@ -1475,7 +1475,7 @@ function scout(args = []) {
 
 function skillsCmd(args = []) {
   const regPath = process.env.TF_SKILLS_REGISTRY
-    || path.join(path.dirname(new URL(import.meta.url).pathname), 'skills-registry.json');
+    || path.join(path.dirname(fileURLToPath(import.meta.url)), 'skills-registry.json'); // v3.8.0 修：pathname 裸拼 win32 双盘符（同 2d3b734 族——skills --usage 注册表读取）
   const reg = readJson(regPath);
   if (!reg || !Array.isArray(reg.skills)) { console.log(`⚠ 注册表缺失或不可解析：${regPath}`); return 1; }
   // --usage：技能加载埋点报表（v2.69.0，只读）——守门 T 模块写入的单文件聚合。
