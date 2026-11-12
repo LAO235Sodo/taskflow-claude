@@ -46,6 +46,7 @@ git diff main...task/<id>                   # 任务全量改动
 | I19 | conventions 完备性（v3.0.0）：文件存在 + 必备小节（确认档位/推送与部署/验证清单/完成定义/禁止事项）齐 + 档位值 ∈ {detailed,batch} | 每会话必读的约定层不缺节、档位值合法（模型禁自改档位） | 红=缺文件/缺节/档位非法 → `tf.mjs init`（升级模式只补缺不覆盖） |
 | I20 | 包完整性（v3.0.0）：packs/*/manifest.json 可解析 + 核心引用 token 都有对应包 + mechanisms.json 与 manifest 一致 | 技能的包清单与机器注册表两源一致，改包必重生成 | 红=manifest 坏/两源漂移 → 修 manifest 后 `node scripts/gen-mechanisms.mjs` |
 | I21 | （提示级）遗留敞口（v3.0.0）：verifying ∧ 无 deploy 记录 ∧ lastActiveAt 超 3 天 | 等验收却没有部署记录且多日未动——口径或状态存疑 | ℹ 呈报：确认部署状态（commit --deployed / deploy --record）或 req-confirm 校准口径 |
+| I22 | （提示级，v3.8.0）STUCK 候选：active/verifying ∧ checkpoints≥3 ∧ 阻塞信号（checkpoints.summary+findings.md）≥3 | 同一阻塞疑似打转（数据探针只报警，判定归编排层 merge.md::STUCK） | ℹ 黄牌点名呈报，处置（revert/另立任务）归编排层 |
 
 ## index.json（L1）
 

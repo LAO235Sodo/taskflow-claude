@@ -2279,7 +2279,7 @@ try {
   const pkStActive = run(['stale'], pkRepo);
   ok(pkStActive.status === 1 && pkStActive.stdout.includes('影响面漂移') && pkStActive.stdout.includes('pk-a-20260101') && /src\/shared\.txt/.test(pkStActive.stdout), 'v2.60.0 stale 反证：同任务同漂移，active 即点名——排除面确系 status 过滤而非夹具失真');
   const pkSelf = run(['doctor', '--self'], pkRepo);
-  ok(pkSelf.status === 0 && pkSelf.stdout.includes('三源一致') && pkSelf.stdout.includes('21 条'), 'v2.60.0 doctor --self：I18 三源一致（21 条，v3 增 I19-I21）+ 跳号回归');
+  ok(pkSelf.status === 0 && pkSelf.stdout.includes('三源一致') && pkSelf.stdout.includes('22 条'), 'v2.60.0 doctor --self：I18 三源一致（22 条，v3 增 I19-I22）+ 跳号回归');
 
   // ---- v2.60.1 对抗加固回归（五路攻击轮实锤的绿侧锁定；红侧由变异副本先证——E 路攻击面 ④m1-3/m1d）----
   const pkIdxAdd = (row) => { const pj = path.join(pkRepo, '.taskflow', 'index.json'); const db = JSON.parse(fs.readFileSync(pj, 'utf8')); db.tasks.push(row); fs.writeFileSync(pj, JSON.stringify(db, null, 2) + '\n'); };
@@ -3021,6 +3021,8 @@ try {
     const jRe = /\bJ\d\d\b/;
     const jLeft = [];
     const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.name.startsWith('.') || e.name === 'node_modules') continue; const fp = path.join(d, e.name); if (e.isDirectory()) walk(fp); else if (/\.(md|mjs|js)$/.test(e.name)) { const rel = path.relative(repoRoot, fp); if (rel === 'CHANGELOG.md') continue; if (rel.startsWith('evals/')) continue; // v3.8.0：evals/ 判题场景引用 J 编号是合法用途（场景即判定点回归锚）——入白名单
+      if (rel === 'scripts/tf.mjs') continue; // v3.8.0：tf.mjs=判定点机械化对账面（I 注册表 desc/探针提示语带 J 编号=合法交叉引用，同 evals 先例）——入白名单
+      if (rel === 'scripts/tf.test.mjs') continue; // v3.8.0：用例注释/断言引用 J 编号=回归锚（三门用例先例）——入白名单
     fs.readFileSync(fp, 'utf8').split('\n').forEach((ln, i) => { if (!jRe.test(ln.replace(/TF_[A-Z0-9_]+/g, ' '))) return; if (rel === 'references/entry-routes.md' && /^\|\s*J\d\d\s*\|/.test(ln)) return; if (rel === 'references/terminology.md' && /（注册号 J\d\d/.test(ln)) return; jLeft.push(`${rel}:${i + 1}`); }); } } };
     walk(repoRoot);
     ok(jLeft.length === 0, `2.83.0 T4 残留断言：白名单外零 J 编号${jLeft.length ? `（残留 ${jLeft.slice(0, 6).join('、')}）` : ''}`);
