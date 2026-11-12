@@ -14,13 +14,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const script = fileURLToPath(new URL('./tf.mjs', import.meta.url)); // fileURLToPath 解码（v3.8.0 修：.pathname 保留百分号编码——CJK worktree 路径下全量 spawn MODULE_NOT_FOUND 实证）
+const script = fileURLToPath(new URL('./tf.mjs', import.meta.url)); // fileURLToPath 一次修两面（v3.8.0 双实证：.pathname 保留百分号编码——CJK worktree 全量 spawn MODULE_NOT_FOUND；pathname 裸拼 win32 双盘符——同 tf.mjs lintCmd 2d3b734）
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-test-'));
 const repo = path.join(tmp, 'repo');
 let failures = 0;
 const FILTER = process.argv.includes('--filter') ? String(process.argv[process.argv.indexOf('--filter') + 1] ?? '') : null; // v3.0.0：--filter <词>——只计/只报匹配断言（夹具照常执行；验证 §4 --filter atomic 主通道）
-const ok = (cond, msg) => { if (FILTER && !msg.includes(FILTER)) return; console.log(`${cond ? '✓' : '✗'} ${msg}`); if (!cond) failures++; };
-const sh = (cmd, cwd) => execFileSync('bash', ['-c', cmd], { cwd, stdio: 'ignore' });
+const ok = (cond, msg) => { if (FILTER && !msg.includes(FILTER)) return; fs.writeSync(1, `${cond ? '✓' : '✗'} ${msg}\n`); if (!cond) failures++; }; // v3.8.0 win32：stdout 全缓冲下崩点前断言结果随缓冲丢失——改 writeSync 同步逐行落盘
+const sh = (cmd, cwd) => execFileSync('bash', ['-c', cmd.replace(/\\/g, '/')], { cwd, stdio: 'ignore' }); // v3.8.0 win32 兼容：path.join 反斜杠进 bash -c 被当转义吃掉（\U→U），统一归一正斜杠
 // v3.0.0：env 隔离——TF_HOST=omp（守门/金丝雀类夹具的宿主面；host=none 分支用 runEnv 显式覆盖）、
 // TF_TASKFLOW_HOME 指临时目录（L0 注册表隔离，旧路径只读不动）
 const TF_HOME_TEST = path.join(tmp, 'tfhome');
@@ -1716,7 +1716,7 @@ try {
 
 
   // ---- DEPLOY_GATE：preflight 真跑（--state-file 本地基线，不依赖 ssh）----
-  const dpScript = new URL('../packs/deploy/assets/harness/deploy-preflight.mjs', import.meta.url).pathname;
+  const dpScript = fileURLToPath(new URL('../packs/deploy/assets/harness/deploy-preflight.mjs', import.meta.url));
   const dpRun = (dpArgs) => spawnSync('node', [dpScript, ...dpArgs], { cwd: repo, encoding: 'utf8' });
   const mainSha = execFileSync('git', ['-C', repo, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
   const stateOk = path.join(tmp, 'live-ok.json');
@@ -1731,10 +1731,10 @@ try {
   const depNoCfg = run(['deploy', '--branch', 'main'], repo);
   ok(depNoCfg.status === 1 && /缺 deploy 配置/.test(depNoCfg.stdout), 'deploy：无 project.json deploy 配置 → 拒绝 + 配置模板（不装即拒）');
   fs.mkdirSync(path.join(repo, 'scripts', 'harness'), { recursive: true });
-  fs.copyFileSync(new URL('../packs/deploy/assets/harness/deploy-preflight.mjs', import.meta.url).pathname, path.join(repo, 'scripts', 'harness', 'deploy-preflight.mjs'));
+  fs.copyFileSync(fileURLToPath(new URL('../packs/deploy/assets/harness/deploy-preflight.mjs', import.meta.url)), path.join(repo, 'scripts', 'harness', 'deploy-preflight.mjs'));
   const pjPath = path.join(tasksDir, 'project.json');
   const pjDeploy = fs.existsSync(pjPath) ? JSON.parse(fs.readFileSync(pjPath, 'utf8')) : {};
-  pjDeploy.deploy = { server: '127.0.0.1', statePath: '/tmp/live.json', jarPath: path.join(tmp, 'fake.jar'), commands: [`echo deployed-ok > ${tmp}/deployed.txt`] };
+  pjDeploy.deploy = { server: '127.0.0.1', statePath: '/tmp/live.json', jarPath: path.join(tmp, 'fake.jar'), commands: [`echo deployed-ok > ${tmp.replace(/\\/g, '/')}/deployed.txt`] };
   fs.writeFileSync(path.join(tasksDir, 'project.json'), JSON.stringify(pjDeploy, null, 2) + '\n');
   const stateOk2 = path.join(tmp, 'live-ok2.json');
   fs.writeFileSync(stateOk2, JSON.stringify({ schema: 'live-deploy-state/1', jar: { commit: mainSha, version: '0.0.0', branch: 'main' } }));
@@ -2744,9 +2744,9 @@ try {
     sh("echo '.taskflow/' >> .git/info/exclude", d);
     fs.writeFileSync(path.join(d, 'a.txt'), 'a\n');
     sh('git add -A && git commit -qm init', d);
-    fs.writeFileSync(path.join(d, '.taskflow', 'project.json'), J({ key: name, git: true, deploy: { server: '127.0.0.1', statePath: `/tmp/unused-${name}.json`, jarPath: '/tmp/does-not-matter.jar', jarProbe: `echo ${'c'.repeat(32)}`, commands: [`echo deployed-ok > ${tmp}/${name}-deployed.txt`] } }));
+    fs.writeFileSync(path.join(d, '.taskflow', 'project.json'), J({ key: name, git: true, deploy: { server: '127.0.0.1', statePath: `/tmp/unused-${name}.json`, jarPath: '/tmp/does-not-matter.jar', jarProbe: `echo ${'c'.repeat(32)}`, commands: [`echo deployed-ok > ${tmp.replace(/\\/g, '/')}/${name}-deployed.txt`] } }));
     fs.mkdirSync(path.join(d, 'scripts', 'harness'), { recursive: true });
-    fs.copyFileSync(new URL('../packs/deploy/assets/harness/deploy-preflight.mjs', import.meta.url).pathname, path.join(d, 'scripts', 'harness', 'deploy-preflight.mjs'));
+    fs.copyFileSync(fileURLToPath(new URL('../packs/deploy/assets/harness/deploy-preflight.mjs', import.meta.url)), path.join(d, 'scripts', 'harness', 'deploy-preflight.mjs'));
     sh('git add scripts && git commit -qm harness', d); // 先入 main：防后续任务分支 git add -A 把它带进分支、checkout main 时消失（r4 实证）
     const state = path.join(tmp, `${name}-live-state.json`);
     const setState = (commit, version) => fs.writeFileSync(state, JSON.stringify({ schema: 'live-deploy-state/1', jar: { commit, version, branch: 'main' } }));
@@ -2761,9 +2761,9 @@ try {
     return { d, state, setState, head, addTask };
   };
   // B1 多义观测（r2 复用：c4-a/b/f/g 四任务分支均并入 main 且 active）→ deploy main 血统多命中 → ⚠ 不写（拒绝猜），exit 0 不阻断
-  fs.writeFileSync(path.join(r2, '.taskflow', 'project.json'), J({ key: 'r2proj', git: true, deploy: { server: '127.0.0.1', statePath: '/tmp/unused-live.json', jarPath: '/tmp/does-not-matter.jar', jarProbe: `echo ${'b'.repeat(32)}`, commands: [`echo deployed-ok > ${tmp}/r2-deployed.txt`] } }));
+  fs.writeFileSync(path.join(r2, '.taskflow', 'project.json'), J({ key: 'r2proj', git: true, deploy: { server: '127.0.0.1', statePath: '/tmp/unused-live.json', jarPath: '/tmp/does-not-matter.jar', jarProbe: `echo ${'b'.repeat(32)}`, commands: [`echo deployed-ok > ${tmp.replace(/\\/g, '/')}/r2-deployed.txt`] } }));
   fs.mkdirSync(path.join(r2, 'scripts', 'harness'), { recursive: true });
-  fs.copyFileSync(new URL('../packs/deploy/assets/harness/deploy-preflight.mjs', import.meta.url).pathname, path.join(r2, 'scripts', 'harness', 'deploy-preflight.mjs'));
+  fs.copyFileSync(fileURLToPath(new URL('../packs/deploy/assets/harness/deploy-preflight.mjs', import.meta.url)), path.join(r2, 'scripts', 'harness', 'deploy-preflight.mjs'));
   const r2State = path.join(tmp, 'r2-live-state.json');
   const r2MainSha = execFileSync('git', ['-C', r2, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   fs.writeFileSync(r2State, JSON.stringify({ schema: 'live-deploy-state/1', jar: { commit: r2MainSha, version: '0.9.0', branch: 'main' } }));
@@ -3020,7 +3020,8 @@ try {
     ok(helpCmds.length === 39, `v3.1.0 COMMANDS 注册表 39 项（hygiene 移植入列）（描述符单源，当前 ${helpCmds.length}）`);
     const jRe = /\bJ\d\d\b/;
     const jLeft = [];
-    const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.name.startsWith('.') || e.name === 'node_modules') continue; const fp = path.join(d, e.name); if (e.isDirectory()) walk(fp); else if (/\.(md|mjs|js)$/.test(e.name)) { const rel = path.relative(repoRoot, fp); if (rel === 'CHANGELOG.md') continue; fs.readFileSync(fp, 'utf8').split('\n').forEach((ln, i) => { if (!jRe.test(ln.replace(/TF_[A-Z0-9_]+/g, ' '))) return; if (rel === 'references/entry-routes.md' && /^\|\s*J\d\d\s*\|/.test(ln)) return; if (rel === 'references/terminology.md' && /（注册号 J\d\d/.test(ln)) return; jLeft.push(`${rel}:${i + 1}`); }); } } };
+    const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.name.startsWith('.') || e.name === 'node_modules') continue; const fp = path.join(d, e.name); if (e.isDirectory()) walk(fp); else if (/\.(md|mjs|js)$/.test(e.name)) { const rel = path.relative(repoRoot, fp); if (rel === 'CHANGELOG.md') continue; if (rel.startsWith('evals/')) continue; // v3.8.0：evals/ 判题场景引用 J 编号是合法用途（场景即判定点回归锚）——入白名单
+    fs.readFileSync(fp, 'utf8').split('\n').forEach((ln, i) => { if (!jRe.test(ln.replace(/TF_[A-Z0-9_]+/g, ' '))) return; if (rel === 'references/entry-routes.md' && /^\|\s*J\d\d\s*\|/.test(ln)) return; if (rel === 'references/terminology.md' && /（注册号 J\d\d/.test(ln)) return; jLeft.push(`${rel}:${i + 1}`); }); } } };
     walk(repoRoot);
     ok(jLeft.length === 0, `2.83.0 T4 残留断言：白名单外零 J 编号${jLeft.length ? `（残留 ${jLeft.slice(0, 6).join('、')}）` : ''}`);
     ok((fs.readFileSync(path.join(repoRoot, 'references', 'new-task.md'), 'utf8').match(/三源对照/g) ?? []).length >= 1, '2.83.0 T9 锚点：new-task.md 含方案三源对照节');
@@ -3552,6 +3553,47 @@ try {
     }
   }
 
+
+  // ---- v3.8.0 三门用例：验收清单滚动门 / 验证报告门（J32）/ I22 STUCK 探针（D域规划任务复盘 2026-11-11）----
+  {
+    const mkG = (dir, created) => { // 最小 accept-able 任务档案（非 git 目录 → 分支前置跳过）
+      fs.mkdirSync(path.join(dir, '.taskflow', 'T-gate'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.taskflow', 'index.json'), JSON.stringify({ tasks: [{ id: 'T-gate', title: 'g', status: 'active', tier: 'small', createdAt: created, lastActiveAt: created, branch: null, worktree: null, sessionID: null }] }));
+      fs.writeFileSync(path.join(dir, '.taskflow', 'T-gate', 'task.json'), JSON.stringify({ id: 'T-gate', title: 'g', goal: 'g', status: 'active', anchor: 'managed', createdAt: created }));
+      fs.writeFileSync(path.join(dir, '.taskflow', 'T-gate', 'confirmations.jsonl'), '{"note":"fx"}\n');
+    };
+    const specW = (dir, body) => fs.writeFileSync(path.join(dir, '.taskflow', 'T-gate', 'spec.md'), body);
+    // 验收清单滚动门
+    const g1 = path.join(tmp, 'gate-compat');
+    mkG(g1, '2026-11-12T00:00:00Z'); specW(g1, '# Spec\n\n## 验收标准\n\n- [ ] 老任务无轮次标注\n');
+    ok(run(['accept', 'T-gate', '--pass'], g1).status === 0, 'v3.8.0 验收清单门：无轮次标注（未启用）→ 静默放行（向后兼容）');
+    const g2 = path.join(tmp, 'gate-behind');
+    mkG(g2, '2026-11-12T00:00:00Z'); specW(g2, '# Spec\n\n## 验收标准\n\n- [ ] 条目（轮次：v0.7；来源：fx）\n\n## 验收结论\n\n定格 v0.8。\n');
+    const rB = run(['accept', 'T-gate', '--pass'], g2);
+    const tjB = JSON.parse(fs.readFileSync(path.join(g2, '.taskflow', 'T-gate', 'task.json'), 'utf8'));
+    ok(rB.status === 1 && /验收清单未跟上终版/.test(rB.stdout) && tjB.status === 'active', 'v3.8.0 验收清单门：清单轮次落后终版 → ⛔ exit 1 且状态不翻转');
+    const g3 = path.join(tmp, 'gate-caught');
+    mkG(g3, '2026-11-12T00:00:00Z'); specW(g3, '# Spec\n\n## 验收标准\n\n- [ ] 条目（轮次：v0.8；来源：fx）\n\n## 验收结论\n\n终版 v0.8。\n');
+    ok(run(['accept', 'T-gate', '--pass'], g3).status === 0, 'v3.8.0 验收清单门：清单跟上终版 → 放行翻转 merged');
+    // 验证报告门（J32）
+    const impMap = '\n\n## 边界与影响面\n\n**影响面地图**：\n\n| 方向 | 资产 |\n| --- | --- |\n| 下游 | a.md |\n';
+    const g4 = path.join(tmp, 'gate-rep-new');
+    mkG(g4, '2026-11-12T00:00:00Z'); specW(g4, '# Spec' + impMap);
+    ok(run(['accept', 'T-gate', '--pass'], g4).status === 1, 'v3.8.0 验证报告门（J32）：影响面地图在档而报告未落（新建档）→ ⛔');
+    const g5 = path.join(tmp, 'gate-rep-old');
+    mkG(g5, '2026-11-01T00:00:00Z'); specW(g5, '# Spec' + impMap);
+    ok(run(['accept', 'T-gate', '--pass'], g5).status === 0, 'v3.8.0 验证报告门（J32）：存量任务（2026-11-11 前建档）无报告 → 提示级放行');
+    const g6 = path.join(tmp, 'gate-rep-have');
+    mkG(g6, '2026-11-12T00:00:00Z'); specW(g6, '# Spec' + impMap);
+    fs.writeFileSync(path.join(g6, '.taskflow', 'T-gate', 'verification-report.md'), '# 验证报告\n');
+    ok(run(['accept', 'T-gate', '--pass'], g6).status === 0, 'v3.8.0 验证报告门（J32）：报告已落 → 放行翻转 merged');
+    // I22 STUCK 探针（doctor）
+    const g7 = path.join(tmp, 'gate-stuck');
+    fs.mkdirSync(path.join(g7, '.taskflow', 'T-st'), { recursive: true });
+    fs.writeFileSync(path.join(g7, '.taskflow', 'index.json'), JSON.stringify({ tasks: [{ id: 'T-st', title: 'st', status: 'active', tier: 'small', createdAt: '2026-11-12T00:00:00Z', lastActiveAt: '2026-11-12T00:00:00Z' }] }));
+    fs.writeFileSync(path.join(g7, '.taskflow', 'T-st', 'task.json'), JSON.stringify({ id: 'T-st', status: 'active', checkpoints: [{ ts: 'a', summary: '修阻塞A' }, { ts: 'b', summary: '阻塞A复发' }, { ts: 'c', summary: '又遇阻塞A' }] }));
+    ok(/STUCK 候选（I22）/.test(run(['doctor'], g7).stdout), 'v3.8.0 I22 STUCK 探针：checkpoints≥3 且阻塞信号≥3 → 黄牌点名');
+  }
 
   process.exitCode = failures ? 1 : 0; // 失败≠0：堵住链式调用「grep 匹配到失败文案也算成功」的放行洞
   console.log(failures ? `\n${failures} 项断言失败` : '\n全部通过');

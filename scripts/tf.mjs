@@ -617,6 +617,7 @@ const INVARIANTS = [
   { id: 'I19', desc: 'conventions 完备性：文件存在 + 必备小节（确认档位/推送与部署/验证清单/完成定义/禁止事项）齐 + 档位值 ∈ {detailed,batch}（v3.0.0，缺=红）' },
   { id: 'I20', desc: '包完整性：packs/*/manifest.json 可解析 + 核心引用的 token 都有对应包 + mechanisms.json 与 manifest 一致（v3.0.0）' },
   { id: 'I21', desc: '（提示级）遗留敞口：verifying ∧ 无 deploy 记录 ∧ lastActiveAt 超 3 天 → ℹ 呈报行（不红，进 ls 摘要；v3.0.0，F30）' },
+  { id: 'I22', desc: '（提示级，v3.8.0/J06）STUCK 候选：active/verifying 任务 checkpoints≥3 且阻塞信号（checkpoints.summary + findings.md）≥3 处 → 黄牌——数据探针只报警，STUCK 判定归编排层（merge.md::STUCK）' },
 ];
 
 /* ---------------- doctor --self：spec↔注册表↔实现 三源一致性 ----------------
@@ -858,6 +859,21 @@ function doctor(args = []) {
     if (t.deploy?.deployedAt || t.deploy?.status === 'verifying') continue;
     const days = (Date.now() - Date.parse(t.lastActiveAt ?? 0)) / 86400000;
     if (Number.isFinite(days) && days > 3) console.log(`ℹ 遗留敞口（I21） ${t.id} verifying 无 deploy 记录且 ${Math.floor(days)} 天未活跃——确认部署状态（commit --deployed / deploy --record）或 req-confirm 校准口径`);
+  }
+
+  // I22（提示级，v3.8.0/J06）：STUCK 候选探针——active/verifying 任务 checkpoints≥3 且阻塞信号
+  //（checkpoints.summary + findings.md 计数「阻塞/blocked」）≥3 处 → 黄牌。数据探针只报警不改行为，
+  // STUCK 判定与处置（revert/另立任务）归编排层——表二 J06 散文纪律的机械化对账面。
+  for (const t of allTasks) {
+    if (t.status !== 'active' && t.status !== 'verifying') continue;
+    const cps = t.checkpoints ?? [];
+    if (cps.length < 3) continue;
+    const blockerHits = cps.filter((c) => /阻塞|blocked/i.test(c.summary ?? '')).length;
+    let findingsBlocks = 0;
+    try { findingsBlocks = (fs.readFileSync(taskDirOf(tasksDir, t.id) + path.sep + 'findings.md', 'utf8').match(/阻塞|blocked/gi) ?? []).length; } catch {}
+    if (blockerHits + findingsBlocks >= 3) {
+      console.log(`⚠ STUCK 候选（I22） ${t.id} checkpoints ${cps.length} 笔且阻塞信号 ${blockerHits + findingsBlocks} 处——疑似同一阻塞打转（J06：同一阻塞 3 次/连续 3 轮新阻塞），判定与处置归编排层（merge.md::STUCK：revert 或另立任务）`);
+    }
   }
 
   // 复发台账报表（v3.0.0/F27）：.taskflow/meta/recurrence.json 每类事故最近复发时间；台账不存在=静默。
@@ -1460,7 +1476,7 @@ function scout(args = []) {
 
 function skillsCmd(args = []) {
   const regPath = process.env.TF_SKILLS_REGISTRY
-    || path.join(path.dirname(new URL(import.meta.url).pathname), 'skills-registry.json');
+    || path.join(path.dirname(fileURLToPath(import.meta.url)), 'skills-registry.json'); // v3.8.0 修：pathname 裸拼 win32 双盘符（同 2d3b734 族——skills --usage 注册表读取）
   const reg = readJson(regPath);
   if (!reg || !Array.isArray(reg.skills)) { console.log(`⚠ 注册表缺失或不可解析：${regPath}`); return 1; }
   // --usage：技能加载埋点报表（v2.69.0，只读）——守门 T 模块写入的单文件聚合。
@@ -1589,6 +1605,49 @@ function accept(idArg, args = []) {
   return 0;
 }
 
+/* ---------------- 验收清单滚动门（v3.8.0，feat：轮次回填机械化） ----------------
+   治「验收反馈只进 checkpoint 日志不回填 spec 清单」（D领域规划文档任务八轮迭代复盘，2026-11-11）：
+   spec 验收标准节启用轮次标注（条目带（轮次：vN））的任务，accept --pass 时机械核对
+   「清单最新轮次 ≥ spec 终版轮次」——清单落后终版 = 终版前有反馈未回填，拦截。
+   未启用（无轮次标注）静默放行——向后兼容存量任务；终版标注缺失提示但放行（机制半启用不硬拦）。 */
+function versionCmp(a, b) {
+  const pa = a.split('.').map(Number), pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d; }
+  return 0;
+}
+function acceptanceLedgerGate(tasksDir, t) {
+  let spec = '';
+  try { spec = fs.readFileSync(taskDirOf(tasksDir, t.id) + path.sep + 'spec.md', 'utf8'); } catch { return true; }
+  const rounds = [...spec.matchAll(/[（(]轮次：v(\d+(?:\.\d+)?)/g)].map((m) => m[1]);
+  if (!rounds.length) return true;
+  const maxRound = rounds.reduce((m, x) => (versionCmp(x, m) > 0 ? x : m));
+  const finalM = spec.match(/(?:终版|定格)\s*v(\d+(?:\.\d+)?)/);
+  if (!finalM) {
+    console.log(`ℹ ${t.id} 验收清单已启用轮次标注（最新 v${maxRound}），spec 无终版标注（「终版 vN」/「定格 vN」）——轮次核对跳过，补标注后此门即生效`);
+    return true;
+  }
+  if (versionCmp(maxRound, finalM[1]) < 0) {
+    console.log(`⛔ ${t.id} 验收清单未跟上终版：清单最新轮次 v${maxRound} < 终版 v${finalM[1]}——终版前有验收反馈未回填 spec 验收标准节（条目须带（轮次：vN）标注）。回填后重跑 accept --pass；口径出处 conventions「验收清单滚动更新」节`);
+    return false;
+  }
+  return true;
+}
+// v3.8.0 验证报告门（J32 半机械）：spec 含「影响面地图」的任务，accept --pass 时核对 verification-report.md 已落——
+// 治「验证报告靠模型自觉落盘」（同验收清单门失灵模式）。向后兼容两级：spec 无影响面地图=未启用静默放行；
+// 2026-11-11 前建档的存量任务降级提示级（不拦截）。口径出处 testing.md「影响面→验证转化」。
+function verificationReportGate(tasksDir, t) {
+  let spec = '';
+  try { spec = fs.readFileSync(taskDirOf(tasksDir, t.id) + path.sep + 'spec.md', 'utf8'); } catch { return true; }
+  if (!spec.includes('影响面地图')) return true;
+  if (fs.existsSync(taskDirOf(tasksDir, t.id) + path.sep + 'verification-report.md')) return true;
+  if (t.createdAt && t.createdAt < '2026-11-11') {
+    console.log(`ℹ ${t.id} spec 含影响面地图但验证报告未落（verification-report.md 缺）——存量任务提示级放行，v3.8.0 起新建档任务将拦截（J32）`);
+    return true;
+  }
+  console.log(`⛔ ${t.id} 影响面地图在档但验证报告未落（.taskflow/${t.id}/verification-report.md 缺）——按 templates/verification-report.md 落报告（影响面地图每个下游消费方一行：实测证据或「未覆盖——原因」），再重跑 accept --pass；口径出处 testing.md「影响面→验证转化」（J32）`);
+  return false;
+}
+
 /* ---------------- accept --pass：验收翻转（*→merged 的唯一写路径） ----------------
    状态机行见 data.md「状态机」；治「状态转换靠自觉」的合并侧补全（--deployed 治部署侧）。
    前置=任务分支已并入主分支（merged 语义=已合并+验收通过；verify-first 必须先合并再翻转，脚本强制）。 */
@@ -1616,6 +1675,8 @@ function acceptPass(tasksDir, t) {
     console.log(`⛔ ${t.id} 无确认回执（.taskflow/${t.id}/confirmations.jsonl 空/缺）——先落用户确认原话：node tf.mjs confirm ${t.id} --note "<用户确认原话>"，再 accept --pass`);
     return 1;
   }
+  if (!acceptanceLedgerGate(tasksDir, t)) return 1; // v3.8.0 验收清单滚动门：清单轮次落后终版 = 拦截
+  if (!verificationReportGate(tasksDir, t)) return 1; // v3.8.0 验证报告门（J32）：影响面地图在档而报告未落 = 拦截
   const p = path.join(tasksDir, t.id, 'task.json');
   const j = readJson(p);
   if (!j) { console.log('⚠ task.json 损坏 → 翻转中止（先修复档案）'); return 1; }
@@ -4576,7 +4637,7 @@ function hygieneCmd(args = []) {
 
 function lintCmd(args = []) {
   const rootOverride = args.includes('--root') ? path.resolve(String(args[args.indexOf('--root') + 1] ?? '')) : null;
-  const root = rootOverride ? path.join(rootOverride, 'scripts') : path.dirname(new URL(import.meta.url).pathname); // root 恒为 <repo>/scripts，读文档走 join(root,'..')
+  const root = rootOverride ? path.join(rootOverride, 'scripts') : path.dirname(fileURLToPath(import.meta.url)); // root 恒为 <repo>/scripts，读文档走 join(root,'..')（v3.8.0 修：URL.pathname 裸拼在 Windows 叠双盘符 C:\C:\，lint 自上线起在 win32 不可用）
   const refs = fs.readdirSync(path.join(root, '..', 'references')).filter((f) => f.endsWith('.md')).map((f) => `references/${f}`);
   const files = ['SKILL.md', 'README.md', ...refs];
   let bad = 0;
